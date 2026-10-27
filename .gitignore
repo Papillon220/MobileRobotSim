@@ -1,0 +1,7 @@
+# Systemdateien
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Lokale Einstellungen von Claude Code
+.claude/settings.local.json

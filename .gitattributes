@@ -1,0 +1,3 @@
+# Zeilenenden: LF für alles (start.command läuft sonst auf dem Mac nicht), CRLF für Windows-Batchdateien
+* text=auto eol=lf
+*.bat text eol=crlf

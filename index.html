@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MobileRobotSim</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><rect x="7" y="4" width="18" height="4" rx="1.5" fill="currentColor"/><rect x="7" y="24" width="18" height="4" rx="1.5" fill="currentColor"/><circle cx="16" cy="16" r="10" fill="#2a78d6"/><path d="M23 16 L13 10.5 L13 21.5 Z" fill="#fff"/></svg>
+      <span>MobileRobotSim</span>
+    </div>
+    <nav class="tabs" role="tablist">
+      <button class="tab-btn active" role="tab" data-tab="plan">Bahnplanung &amp; Pfadverfolgung</button>
+      <button class="tab-btn" role="tab" data-tab="teleop">Manuelle Steuerung & Odonmetrie</button>
+      <button class="tab-btn" role="tab" data-tab="slam">Lidar SLAM</button>
+      <button class="tab-btn" role="tab" data-tab="follow">Pfadfolgeregelung</button>
+    </nav>
+    <div class="author">
+      <span class="author-name">Prof. Dr.-Ing. Frank Bender</span>
+      <span class="author-meta">DHBW Stuttgart · Letzte Änderung: <time class="last-modified">–</time> · <span class="version"></span></span>
+    </div>
+  </header>
+
+  <main>
+    <!-- ======================= Reiter 1: Bahnplanung ======================= -->
+    <section id="tab-plan" class="tab active" role="tabpanel">
+      <div class="layout">
+        <aside class="panel">
+          <div class="card">
+            <h3>Karte</h3>
+            <select id="mapSel" aria-label="Karte"></select>
+            <p class="hint" id="mapDesc"></p>
+            <div class="grid2">
+              <label>Aufblähung [m]<input id="inflateR" type="number" value="0.25" min="0" max="1" step="0.05"></label>
+              <label>Roboter-Ø [m]<input id="trackW" type="number" value="0.2" min="0.05" max="1" step="0.05"></label>
+            </div>
+            <label class="chk"><input type="checkbox" id="showInflation" checked> Sicherheitszone anzeigen</label>
+          </div>
+
+          <div class="card">
+            <h3>Start &amp; Ziel</h3>
+            <div class="grid3 pose">
+              <span class="pose-lbl">Start</span>
+              <input id="sx" type="number" step="0.1" aria-label="Start x">
+              <input id="sy" type="number" step="0.1" aria-label="Start y">
+              <input id="sth" type="number" step="5" aria-label="Start θ in Grad">
+              <span class="pose-lbl">Ziel</span>
+              <input id="gx" type="number" step="0.1" aria-label="Ziel x">
+              <input id="gy" type="number" step="0.1" aria-label="Ziel y">
+              <input id="gth" type="number" step="5" aria-label="Ziel θ in Grad">
+              <span></span><span class="sub">x [m]</span><span class="sub">y [m]</span><span class="sub">θ [°]</span>
+            </div>
+            <div class="seg" id="clickMode">
+              <button data-mode="start">Start per Klick</button>
+              <button data-mode="goal">Ziel per Klick</button>
+              <button id="btnDefaultPoses" title="Standard-Start/Ziel der Karte">Standard</button>
+            </div>
+            <p class="hint">Klick setzt die Position, Ziehen mit gedrückter Maustaste die Orientierung.</p>
+          </div>
+
+          <div class="card">
+            <h3>Planungsalgorithmus</h3>
+            <select id="algoSel" aria-label="Algorithmus"></select>
+            <p class="hint" id="algoDesc"></p>
+            <div id="algoParams" class="params"></div>
+            <div class="grid2">
+              <label>Zufalls-Seed<input id="seed" type="number" value="1" min="0" step="1"></label>
+            </div>
+            <label class="chk"><input type="checkbox" id="showTree" checked> Suchbaum / Roadmap anzeigen</label>
+          </div>
+
+          <div class="card">
+            <h3>Pure-Pursuit-Regler</h3>
+            <div class="grid2">
+              <label>Lookahead [m]<input id="ppL" type="number" value="0.25" min="0.05" max="5" step="0.05"></label>
+              <label><span>v<sub>soll</sub> [m/s]</span><input id="ppV" type="number" value="1" min="0.05" max="5" step="0.05"></label>
+              <label><span>ω<sub>max</sub> [rad/s]</span><input id="ppW" type="number" value="3" min="0.1" max="20" step="0.1"></label>
+              <label>Heading-Gain<input id="ppKh" type="number" value="2.5" min="0.1" max="20" step="0.1"></label>
+            </div>
+            <label class="full">Überschwingreduktion an Ecken
+              <select id="ppMode">
+                <option value="0">0 – keine (Standard Pure Pursuit)</option>
+                <option value="1">1 – Drehen auf der Stelle</option>
+                <option value="2" selected>2 – Dynamische Geschwindigkeitsreduktion</option>
+              </select>
+            </label>
+            <details>
+              <summary>Endanflug &amp; Toleranzen</summary>
+              <div class="grid2">
+                <label>Dreh-Schwelle [°]<input id="ppRot" type="number" value="30" min="1" max="180" step="1"></label>
+                <label>Endanflug ab [m]<input id="ppTerm" type="number" value="1" min="0" max="5" step="0.1"></label>
+                <label>Ziel-Gain v<input id="ppKg" type="number" value="0.8" min="0.05" max="5" step="0.05"></label>
+                <label>Pos.-Toleranz [m]<input id="ppTolP" type="number" value="0.15" min="0.01" max="1" step="0.01"></label>
+                <label>Winkel-Tol. [°]<input id="ppTolH" type="number" value="8" min="0.5" max="90" step="0.5"></label>
+              </div>
+            </details>
+          </div>
+
+          <div class="card">
+            <h3>Simulation</h3>
+            <div class="grid2">
+              <label>Abtastzeit [s]<input id="simDt" type="number" value="0.1" min="0.005" max="0.5" step="0.005"></label>
+              <label title="Wird bei langen Bahnen automatisch auf 3 × Bahnlänge / v_soll verlängert">Max. Dauer [s]<input id="simTmax" type="number" value="150" min="5" max="2000" step="5"></label>
+              <label class="full">Animationsgeschwindigkeit
+                <select id="simSpeed">
+                  <option value="1">1× (Echtzeit)</option>
+                  <option value="2">2×</option>
+                  <option value="5" selected>5×</option>
+                  <option value="10">10×</option>
+                  <option value="25">25×</option>
+                  <option value="0">sofort</option>
+                </select>
+              </label>
+            </div>
+          </div>
+        </aside>
+
+        <div class="center">
+          <div class="toolbar">
+            <button id="btnPlan" class="btn primary">Bahn planen</button>
+            <button id="btnStart" class="btn go">▶ Start</button>
+            <button id="btnPause" class="btn">❚❚ Pause</button>
+            <button id="btnReset" class="btn">Zurücksetzen</button>
+            <span class="spacer"></span>
+            <button id="btnBatch" class="btn" title="Alle Algorithmen nacheinander planen und abfahren">Alle Algorithmen ausführen</button>
+          </div>
+          <div class="canvas-wrap map-wrap">
+            <canvas id="planCanvas"></canvas>
+            <div class="hud" id="planHud"></div>
+            <div class="busy" id="busy" hidden><span class="spinner"></span><span id="busyText">Plane …</span></div>
+          </div>
+          <div class="legend" id="planLegend">
+            <span><i class="sw line" style="--c:var(--planned)"></i>Geplante Bahn</span>
+            <span><i class="sw line" style="--c:var(--driven)"></i>Gefahrene Bahn</span>
+            <span><i class="sw ring"></i>Start</span>
+            <span><i class="sw cross"></i>Ziel</span>
+            <span><i class="sw box" style="--c:#dcdbd5"></i>Sicherheitszone</span>
+            <span id="legTree"><i class="sw line thin" style="--c:#7aaee8"></i>Suchbaum / Roadmap</span>
+            <span id="legMline" hidden><i class="sw line dashed" style="--c:var(--mline)"></i>M-Linie</span>
+            <span id="legDt" hidden><i class="sw grad"></i>Distanz zum Ziel (dunkel = nah)</span>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="card">
+            <h3>Aktueller Lauf</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">Algorithmus</span><span class="v" id="rAlgo">–</span></div>
+              <div class="stat"><span class="k">Bahnlänge</span><span class="v"><b id="rLen">–</b> m</span></div>
+              <div class="stat"><span class="k">Planungszeit</span><span class="v"><b id="rTime">–</b> ms</span></div>
+              <div class="stat"><span class="k">Fahrdauer</span><span class="v"><b id="rTravel">–</b> s</span></div>
+              <div class="stat"><span class="k">Gefahrene Strecke</span><span class="v"><b id="rDist">–</b> m</span></div>
+              <div class="stat"><span class="k">Status</span><span class="v" id="rStatus">–</span></div>
+            </div>
+            <ul class="info" id="planInfo"></ul>
+          </div>
+
+          <div class="card grow">
+            <div class="card-head">
+              <h3>Vergleich</h3>
+              <div class="mini-actions">
+                <button id="btnCsv" class="btn small" title="Tabelle als CSV speichern">CSV</button>
+                <button id="btnClear" class="btn small" title="Alle Ergebnisse löschen">Löschen</button>
+              </div>
+            </div>
+            <div class="cmp-controls">
+              <select id="cmpMetric" aria-label="Kennzahl">
+                <option value="length">Bahnlänge [m]</option>
+                <option value="planTime">Planungszeit [ms]</option>
+                <option value="travel">Fahrdauer [s]</option>
+                <option value="dist">Gefahrene Strecke [m]</option>
+              </select>
+              <label class="chk"><input type="checkbox" id="cmpThisMap" checked> nur aktuelle Karte</label>
+            </div>
+            <div id="bars" class="bars"><p class="empty">Noch keine Ergebnisse. Bahn planen und mit „Start“ abfahren – jeder Lauf wird hier eingetragen.</p></div>
+            <div class="table-wrap">
+              <table id="cmpTable">
+                <thead><tr><th title="In Karte einblenden">👁</th><th>#</th><th>Algorithmus</th><th class="num" title="Bahnlänge in m">Länge m</th><th class="num" title="Planungszeit in ms">Plan ms</th><th class="num" title="Fahrdauer in s">Fahrt s</th><th title="Status">St.</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="hint">Häkchen 👁 blendet die Bahnen eines Laufs zum Vergleich in die Karte ein. Bestwerte sind fett markiert.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ===================== Reiter 2: Manuelle Steuerung ===================== -->
+    <section id="tab-teleop" class="tab" role="tabpanel">
+      <div class="layout">
+        <aside class="panel">
+          <div class="card">
+            <h3>Steuerung mit Pfeiltasten oder W/A/S/D</h3>
+            <div class="keypad" id="keypad">
+              <button data-key="ArrowUp" class="k-up" aria-label="vorwärts">▲</button>
+              <button data-key="ArrowLeft" class="k-left" aria-label="links drehen">◀</button>
+              <button data-key="ArrowDown" class="k-down" aria-label="rückwärts">▼</button>
+              <button data-key="ArrowRight" class="k-right" aria-label="rechts drehen">▶</button>
+              <button data-key=" " class="k-space" aria-label="Stopp">Leertaste = Stopp</button>
+            </div>
+            <label class="full">Modus
+              <select id="tMode">
+                <option value="hold">Halten – Taste gedrückt = fahren</option>
+                <option value="step">Inkrementell – Tastendruck ändert Sollwert</option>
+              </select>
+            </label>
+            <div class="grid2">
+              <label><span>v<sub>max</sub> [m/s]</span><input id="tVmax" type="number" value="1" min="0.1" max="5" step="0.1"></label>
+              <label><span>ω<sub>max</sub> [rad/s]</span><input id="tWmax" type="number" value="1.5" min="0.1" max="10" step="0.1"></label>
+              <label>Beschl. v [m/s²]<input id="tAv" type="number" value="1.5" min="0.1" max="50" step="0.1"></label>
+              <label>Beschl. ω [rad/s²]<input id="tAw" type="number" value="6" min="0.1" max="100" step="0.5"></label>
+              <label class="step-only">Δv je Taste [m/s]<input id="tDv" type="number" value="0.1" min="0.01" max="1" step="0.01"></label>
+              <label class="step-only">Δω je Taste [rad/s]<input id="tDw" type="number" value="0.2" min="0.01" max="2" step="0.01"></label>
+              <label>Spurweite [m]<input id="tTrack" type="number" value="0.2" min="0.05" max="1" step="0.01"></label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Vordefinierte Manöver</h3>
+            <select id="mSel" aria-label="Manöver">
+              <option value="eight">Liegende Acht (Kreuzung im Ursprung)</option>
+              <option value="circle">Kreis gegen den Uhrzeigersinn</option>
+              <option value="squareL">Quadrat gegen den Uhrzeigersinn</option>
+              <option value="squareR">Quadrat im Uhrzeigersinn</option>
+              <option value="outback">Hin und zurück</option>
+              <option value="dhbw">Schriftzug „DHBW“</option>
+            </select>
+            <p class="hint" id="mDesc"></p>
+            <div class="grid2">
+              <label><span id="mSizeLbl">Größe [m]</span><input id="mSize" type="number" value="2" min="0.2" max="20" step="0.1"></label>
+              <label><span>v [m/s]</span><input id="mV" type="number" value="0.5" min="0.05" max="3" step="0.05"></label>
+              <label id="mWLbl"><span>ω Drehen auf der Stelle [rad/s]</span><input id="mW" type="number" value="1" min="0.1" max="10" step="0.1"></label>
+            </div>
+            <div class="btn-row">
+              <button id="mStart" class="btn go">▶ Manöver fahren</button>
+              <button id="mDemo" class="btn" title="Schriftzug „DHBW“ im Vollbild endlos abfahren – Karte und Trajektorien ohne Bedienelemente. Tempo mit + / − (oder Leiste bei Mausbewegung), beenden mit Esc oder Doppelklick.">⛶ DHBW-Demo (Vollbild)</button>
+            </div>
+            <p class="hint">Das Manöver beginnt an der Startpose im Ursprung und wird fortlaufend wiederholt, bis es angehalten wird; die bisherige Fahrt wird verworfen. Mit Fehlersimulation wächst die Abweichung so von Runde zu Runde. Die Sollwerte (v, ω) werden ohne Beschleunigungsrampe exakt vorgegeben. Ein Tastendruck übernimmt wieder die manuelle Steuerung.</p>
+          </div>
+
+          <div class="card">
+            <h3>Fehlersimulation</h3>
+            <label class="chk"><input type="checkbox" id="fOn"> Offset auf Drehrate ω aktivieren</label>
+            <div class="slider-row">
+              <input type="range" id="fOffR" min="-0.5" max="0.5" step="0.005" value="0.05" aria-label="Offset ω">
+              <input type="number" id="fOff" min="-2" max="2" step="0.005" value="0.05" aria-label="Offset ω in rad/s">
+              <span class="unit">rad/s</span>
+            </div>
+            <p class="hint">Der fehlerbehaftete Roboter erhält dieselben Eingänge, jedoch ω + Δω. Seine Bahn wird grau dargestellt. Beim Aktivieren startet er an der aktuellen Pose.</p>
+          </div>
+
+          <div class="card">
+            <h3>Anzeige</h3>
+            <div class="grid2">
+              <label>Plot-Zeitfenster
+                <select id="tWin">
+                  <option value="10">10 s</option>
+                  <option value="30" selected>30 s</option>
+                  <option value="60">60 s</option>
+                  <option value="0">gesamt</option>
+                </select>
+              </label>
+              <label>Theta
+                <select id="tThUnit">
+                  <option value="deg">Grad, stetig</option>
+                  <option value="rad">rad, stetig</option>
+                  <option value="wrap">Grad, [−180°, 180°]</option>
+                </select>
+              </label>
+            </div>
+            <div class="btn-row">
+              <button id="tPause" class="btn">❚❚ Pause</button>
+              <button id="tReset" class="btn">Zurücksetzen</button>
+            </div>
+          </div>
+        </aside>
+
+        <div class="center" id="teleCenter">
+          <div class="demo-exit" id="demoExit">Tempo mit + / − · Esc oder Doppelklick beendet die Demo</div>
+          <div class="canvas-wrap tele-wrap">
+            <canvas id="teleCanvas" tabindex="0" aria-label="Simulationsfläche – mit Pfeiltasten oder W/A/S/D steuern"></canvas>
+            <div class="hud" id="teleHud"></div>
+            <div class="focus-hint" id="focusHint">Pfeiltasten oder W/A/S/D zum Fahren verwenden</div>
+          </div>
+          <div class="legend">
+            <span><i class="sw line" style="--c:var(--driven)"></i>Bahn ideal</span>
+            <span><i class="sw line dashed" style="--c:var(--faulty)"></i>Bahn mit ω-Offset</span>
+            <span><i class="sw ring"></i>Startpose</span>
+          </div>
+          <div class="plots-head">
+            <h3>Trajektorien</h3>
+            <div class="legend inline">
+              <span><i class="sw line" style="--c:var(--driven)"></i>ideal</span>
+              <span><i class="sw line dashed" style="--c:var(--faulty)"></i>mit ω-Offset</span>
+            </div>
+          </div>
+          <div class="plots">
+            <canvas id="plotX"></canvas>
+            <canvas id="plotY"></canvas>
+            <canvas id="plotTh"></canvas>
+            <canvas id="plotV"></canvas>
+            <canvas id="plotW"></canvas>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="card">
+            <h3>Zustand</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">Zeit t</span><span class="v"><b id="sT">0,00</b> s</span></div>
+              <div class="stat"><span class="k">x</span><span class="v"><b id="sX">0,00</b> m</span></div>
+              <div class="stat"><span class="k">y</span><span class="v"><b id="sY">0,00</b> m</span></div>
+              <div class="stat"><span class="k">θ</span><span class="v"><b id="sTh">0,0</b> °</span></div>
+              <div class="stat"><span class="k">v</span><span class="v"><b id="sV">0,00</b> m/s</span></div>
+              <div class="stat"><span class="k">ω</span><span class="v"><b id="sW">0,00</b> rad/s</span></div>
+              <div class="stat"><span class="k">Radgeschw. links / rechts</span><span class="v"><b id="sWheels">0,00 / 0,00</b> m/s</span></div>
+              <div class="stat"><span class="k">Gefahrene Strecke</span><span class="v"><b id="sDist">0,00</b> m</span></div>
+            </div>
+          </div>
+          <div class="card" id="faultCard">
+            <h3>Mit Fehler (grau)</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">x / y</span><span class="v"><b id="fX">–</b> m</span></div>
+              <div class="stat"><span class="k">θ</span><span class="v"><b id="fTh">–</b> °</span></div>
+              <div class="stat"><span class="k">ω + Δω</span><span class="v"><b id="fW">–</b> rad/s</span></div>
+              <div class="stat"><span class="k">Positionsabweichung</span><span class="v"><b id="fErr">–</b> m</span></div>
+              <div class="stat"><span class="k">Winkelabweichung</span><span class="v"><b id="fErrTh">–</b> °</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Modell</h3>
+            <p class="formula">dx/dt = v·cos θ<br>dy/dt = v·sin θ<br>dθ/dt = ω</p>
+            <p class="formula">v<sub>R,L</sub> = v ± ω·b/2</p>
+            <p class="hint">Differentialantrieb (Zwei-Rad-Roboter), exakte Integration bei konstantem v, ω je Teilschritt (1 ms).</p>
+          </div>
+        </aside>
+      </div>
+
+    </section>
+    <!-- ============================ Reiter 3: SLAM ============================ -->
+    <section id="tab-slam" class="tab m-manual" role="tabpanel">
+      <div class="layout">
+        <aside class="panel">
+          <div class="card">
+            <h3>Umgebung</h3>
+            <select id="slMap" aria-label="Karte"></select>
+            <p class="hint" id="slMapDesc"></p>
+          </div>
+
+          <div class="card">
+            <h3>Fahrmodus</h3>
+            <div class="seg" id="slMode">
+              <button data-mode="manual" class="active">Manuell</button>
+              <button data-mode="route">Strukturiert</button>
+              <button data-mode="random">Zufällig</button>
+              <button data-mode="waypoints">Wegpunkte</button>
+            </div>
+            <p class="hint" id="slModeHint"></p>
+            <div class="wp-only wp-box">
+              <div class="wp-head"><b id="slWpCount">0</b>&nbsp;Wegpunkte</div>
+              <div class="btn-row">
+                <button id="slWpUndo" class="btn small">Letzten entfernen</button>
+                <button id="slWpClear" class="btn small">Alle löschen</button>
+              </div>
+              <label class="chk"><input type="checkbox" id="slWpLoop"> Rundkurs (zurück zum 1. Wegpunkt)</label>
+              <label class="chk"><input type="checkbox" id="slWpPlan" checked> Kollisionsfreie Verbindung (A*)</label>
+              <label class="chk"><input type="checkbox" id="slWpEst"> Navigation mit geschätzter Pose</label>
+            </div>
+            <div class="keypad small" id="slKeypad">
+              <button data-key="ArrowUp" class="k-up" aria-label="vorwärts">▲</button>
+              <button data-key="ArrowLeft" class="k-left" aria-label="links drehen">◀</button>
+              <button data-key="ArrowDown" class="k-down" aria-label="rückwärts">▼</button>
+              <button data-key="ArrowRight" class="k-right" aria-label="rechts drehen">▶</button>
+            </div>
+            <div class="grid2">
+              <label><span>v [m/s]</span><input id="slV" type="number" value="0.4" min="0.05" max="2" step="0.05"></label>
+              <label><span>ω<sub>max</sub> [rad/s]</span><input id="slW" type="number" value="1" min="0.1" max="5" step="0.1"></label>
+              <label class="rand-only"><span>Sicherheitsabstand [m]</span><input id="slSafe" type="number" value="0.5" min="0.1" max="3" step="0.05"></label>
+              <label class="route-only"><span>Rasterabstand Route [m]</span><input id="slSpacing" type="number" value="2.5" min="1" max="8" step="0.5"></label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Lidar</h3>
+            <div class="grid2">
+              <label><span>Scan-Rate [Hz] (Umdr./s)</span><input id="slRate" type="number" value="25" min="0.5" max="50" step="0.5"></label>
+              <label><span>Reichweite [m]</span><input id="slRange" type="number" value="5.5" min="0.5" max="30" step="0.5"></label>
+              <label><span>Öffnungswinkel [°]</span><input id="slFov" type="number" value="360" min="10" max="360" step="5"></label>
+              <label><span>Messpunkte je Scan</span><input id="slBeams" type="number" value="360" min="10" max="1440" step="10"></label>
+              <label><span>Rauschen σ [m]</span><input id="slNoise" type="number" value="0.01" min="0" max="0.2" step="0.005"></label>
+            </div>
+            <p class="hint lidar-info" id="slLidarInfo"></p>
+            <label class="full">Scan-Modell
+              <select id="slModel">
+                <option value="rotating" selected>Rotierender Einzelstrahl (zeitversetzte Messpunkte)</option>
+                <option value="ideal">Ideal – alle Messpunkte gleichzeitig (Momentaufnahme)</option>
+              </select>
+            </label>
+            <label class="chk"><input type="checkbox" id="slDeskew" checked> Bewegungsverzerrung korrigieren (Deskewing)</label>
+            <label class="chk"><input type="checkbox" id="slShowBeams" checked> Laserstrahl &amp; Nachleuchten anzeigen</label>
+            <button id="slMatlabLidar" class="btn small" title="Öffnungswinkel ±45°, 180 Messpunkte, 5,5 m, 25 Hz, Momentaufnahme">Frontlidar 90° (ideal)</button>
+            <p class="hint">Ein einzelner Laserstrahl dreht sich und misst in festen Winkelschritten. Da sich der Roboter währenddessen bewegt, ist ein Scan verzerrt; das Deskewing rechnet die Eigenbewegung mit der Odometrie heraus. Zum Beobachten der Rotation: Scan-Rate 1 Hz und Tempo 0,25×.</p>
+          </div>
+
+          <div class="card">
+            <h3>Odometrie (Radencoder, Gyro)</h3>
+            <div class="grid2">
+              <label><span>Rauschen v [%]</span><input id="slSigV" type="number" value="2" min="0" max="20" step="0.5"></label>
+              <label><span>Rauschen ω [rad/s]</span><input id="slSigW" type="number" value="0.02" min="0" max="0.5" step="0.005"></label>
+              <label><span>Drift ω [rad/s]</span><input id="slBias" type="number" value="0.01" min="-0.2" max="0.2" step="0.005"></label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Schätzverfahren</h3>
+            <select id="slMethod" aria-label="Schätzverfahren">
+              <option value="slam">SLAM – Scan-to-Map-Matching + EKF</option>
+              <option value="known">Lokalisierung in bekannter Karte</option>
+              <option value="odom">Nur Odometrie (Kartierung ohne Korrektur)</option>
+            </select>
+            <div class="grid2">
+              <label><span>Suchfenster ±[m]</span><input id="slWinT" type="number" value="0.1" min="0.02" max="0.5" step="0.01"></label>
+              <label><span>Suchfenster ±[°]</span><input id="slWinR" type="number" value="5" min="0.5" max="30" step="0.5"></label>
+              <label class="full">Kartenauflösung
+                <select id="slRes"><option value="auto">wie Umgebung</option><option value="20">0,05 m</option><option value="10">0,1 m</option></select>
+              </label>
+            </div>
+            <p class="hint">Umgebung, Verfahren und Auflösung starten die Simulation neu. Lidar-, Odometrie- und Suchparameter wirken sofort.</p>
+            <p class="hint">Ohne Schleifenschluss (Loop Closure) wird Drift nicht nachträglich korrigiert. Bei kleinem Öffnungswinkel (z. B. 90° beim Frontlidar) ist die Orientierung schlechter beobachtbar – in großen Karten wächst der Fehler dann deutlich.</p>
+          </div>
+        </aside>
+
+        <div class="center" id="slCenter">
+          <div class="demo-exit">Tempo mit + / − · Esc oder Doppelklick beendet die Demo</div>
+          <div class="toolbar">
+            <button id="slStart" class="btn go">▶ Start</button>
+            <button id="slReset" class="btn">Zurücksetzen</button>
+            <button id="slDemo" class="btn" title="Endlose Rundfahrt durch das Bürogebäude mit Atrium im Vollbild – 90°-Lidar mit 10 Hz, ohne Bedienelemente. Tempo mit + / − (oder Leiste bei Mausbewegung), beenden mit Esc oder Doppelklick.">⛶ Demo Bürogebäude (Vollbild)</button>
+            <label class="inline-sel">Tempo
+              <select id="slSpeed"><option value="0.1">0,1×</option><option value="0.25">0,25×</option><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="10">10×</option></select>
+            </label>
+            <span class="spacer"></span>
+            <label class="chk"><input type="checkbox" id="slShowOdo" checked> Nur-Odometrie-Bahn</label>
+            <label class="chk"><input type="checkbox" id="slShowTrue" checked> Wahre Bahn in SLAM-Karte</label>
+          </div>
+          <div class="slam-views">
+            <div>
+              <div class="view-title">Wahre Umgebung &amp; Lidar</div>
+              <div class="canvas-wrap slam-wrap">
+                <canvas id="slWorld" tabindex="0" aria-label="Wahre Umgebung"></canvas>
+                <div class="busy" id="slBusy" hidden><span class="spinner"></span><span>Route wird berechnet …</span></div>
+              </div>
+            </div>
+            <div>
+              <div class="view-title">SLAM-Karte (Occupancy Grid, geschätzt)</div>
+              <div class="canvas-wrap slam-wrap"><canvas id="slMapCv" aria-label="SLAM-Karte"></canvas><div class="hud" id="slHud"></div></div>
+            </div>
+          </div>
+          <div class="legend">
+            <span><i class="sw line dashed" style="--c:var(--driven)"></i>Wahre Bahn</span>
+            <span><i class="sw line" style="--c:var(--accent)"></i>Geschätzte Bahn</span>
+            <span id="slLegOdo"><i class="sw line dashed" style="--c:var(--faulty)"></i>Nur Odometrie</span>
+            <span><i class="sw box" style="--c:rgba(250,178,25,0.35)"></i>Lidar-Sichtfeld</span>
+            <span><i class="sw line" style="--c:#008300"></i>Laserstrahl</span>
+            <span><i class="sw dotm"></i>Scan an geschätzter Pose</span>
+            <span id="slLegRoute"><i class="sw line dashed" style="--c:#9085e9"></i>Route</span>
+            <span><i class="sw box" style="--c:#c8c8c4"></i>unbekannt</span>
+          </div>
+          <div class="plots-head">
+            <h3>Schätzfehler</h3>
+            <div class="legend inline">
+              <span><i class="sw line" style="--c:var(--accent)"></i>Schätzung</span>
+              <span><i class="sw line dashed" style="--c:var(--faulty)"></i>nur Odometrie</span>
+            </div>
+            <span class="spacer"></span>
+            <label class="inline-sel">Zeitfenster
+              <select id="slWin"><option value="30">30 s</option><option value="60" selected>60 s</option><option value="0">gesamt</option></select>
+            </label>
+          </div>
+          <div class="plots">
+            <canvas id="slPlotE"></canvas>
+            <canvas id="slPlotH"></canvas>
+            <canvas id="slPlotR"></canvas>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="card">
+            <h3>Zustand</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">Zeit t</span><span class="v"><b id="slT">0,0</b> s</span></div>
+              <div class="stat"><span class="k">Scans</span><span class="v"><b id="slScans">0</b></span></div>
+              <div class="stat"><span class="k">Wahre Pose</span><span class="v" id="slPTrue">–</span></div>
+              <div class="stat"><span class="k">Geschätzte Pose</span><span class="v" id="slPEst">–</span></div>
+              <div class="stat"><span class="k">Fehler Schätzung</span><span class="v"><b id="slErr">–</b> m</span></div>
+              <div class="stat"><span class="k">Fehler nur Odometrie</span><span class="v"><b id="slErrOdo">–</b> m</span></div>
+              <div class="stat"><span class="k">Gefahrene Strecke</span><span class="v"><b id="slDist">0,00</b> m</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Scan-Matching</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">Status</span><span class="v" id="slStatus">–</span></div>
+              <div class="stat"><span class="k">Residuum (RMS)</span><span class="v"><b id="slRms">–</b> mm</span></div>
+              <div class="stat"><span class="k">Inlier-Anteil</span><span class="v"><b id="slInl">–</b> %</span></div>
+              <div class="stat"><span class="k">Verworfene Scans</span><span class="v"><b id="slRej">0</b></span></div>
+              <div class="stat"><span class="k">Bewegungsverzerrung (max.)</span><span class="v" title="Größte Verschiebung eines Messpunkts durch die Eigenbewegung während des Scans: roh / nach Deskewing"><b id="slDist0">–</b> / <b id="slDist1">–</b> mm</span></div>
+              <div class="stat"><span class="k">Rechenzeit je Scan</span><span class="v"><b id="slMs">–</b> ms</span></div>
+              <div class="stat"><span class="k">σ<sub>x,y</sub> (EKF)</span><span class="v"><b id="slSig">–</b> mm</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Karte &amp; Fahrt</h3>
+            <div class="stats">
+              <div class="stat"><span class="k">Kartenabdeckung</span><span class="v"><b id="slCov">–</b> %</span></div>
+              <div class="stat"><span class="k">Kartengüte</span><span class="v" title="Anteil der bekannten Zellen, die korrekt als frei/belegt klassifiziert sind"><b id="slAcc">–</b> %</span></div>
+              <div class="stat"><span class="k">Fahrmodus</span><span class="v" id="slDrive">–</span></div>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Ablauf je Scan</h3>
+            <ol class="info steps">
+              <li><b>Prädiktion</b>: Pose mit verrauschter Odometrie fortschreiben, Kovarianz P wächst.</li>
+              <li><b>Scan-Matching</b>: Gittersuche um die Prädiktion; Kosten = Abstand der Scan-Endpunkte zur nächsten Wand der Karte.</li>
+              <li><b>EKF-Korrektur</b> mit der gematchten Pose (Gating gegen Fehlzuordnungen).</li>
+              <li><b>Kartierung</b>: Strahlen an der geschätzten Pose ins Occupancy Grid eintragen (Log-Odds).</li>
+            </ol>
+          </div>
+        </aside>
+      </div>
+    </section>
+    <!-- ===================== Reiter 4: Pfadfolgeregelung ===================== -->
+    <section id="tab-follow" class="tab wp-pre" role="tabpanel">
+      <div class="layout">
+        <aside class="panel">
+          <div class="card">
+            <h3>Umgebung</h3>
+            <select id="fwMap" aria-label="Karte"></select>
+            <p class="hint" id="fwMapDesc"></p>
+          </div>
+
+          <div class="card">
+            <h3>Wegpunkte</h3>
+            <div class="seg" id="fwWpMode">
+              <button data-mode="pre" class="active">Vordefiniert</button>
+              <button data-mode="manual">Manuell</button>
+            </div>
+            <p class="hint fw-pre-only">Vordefinierte Wegpunkte der Karte (Demo-Szene: Rundfahrt entlang der Außenwände; Bürogebäude mit Atrium: Rundgang um das Atrium; sonst Eckpunkte eines A*-Pfades vom Start zum Ziel).</p>
+            <p class="hint fw-man-only">Klick in die Karte fügt einen Wegpunkt hinzu. Der erste Wegpunkt ist die Startposition. Die Startausrichtung zeigt zunächst zum zweiten Wegpunkt und lässt sich durch Ziehen der Pfeilspitze oder mit dem Mausrad über dem Startpunkt einstellen (Umschalt = feine Schritte).</p>
+            <div class="btn-row fw-man-only">
+              <span class="hint" id="fwTh0Info">Startausrichtung: automatisch</span>
+              <button id="fwTh0Auto" class="btn small" title="Startausrichtung wieder zum zweiten Wegpunkt zeigen lassen">Automatisch</button>
+            </div>
+            <div class="btn-row fw-man-only">
+              <button id="fwUndo" class="btn small">Letzten entfernen</button>
+              <button id="fwClear" class="btn small">Alle löschen</button>
+              <button id="fwCopyPre" class="btn small" title="Vordefinierte Wegpunkte als Vorlage übernehmen">Vorlage übernehmen</button>
+            </div>
+            <label class="chk"><input type="checkbox" id="fwLoop"> Rundkurs (zurück zum 1. Wegpunkt)</label>
+            <label class="chk"><input type="checkbox" id="fwDense"> Kollisionsfreie Zwischenpunkte (A*) einfügen</label>
+            <div class="wp-head"><b id="fwCount">0</b>&nbsp;Wegpunkte</div>
+          </div>
+
+          <div class="card">
+            <h3><label class="chk inline-h"><input type="checkbox" id="fwUseRule" checked> <span class="dot-sw" style="--c:#eb6834"></span> Regelbasierte Folgeregelung</label></h3>
+            <div class="grid2">
+              <label><span>v [m/s]</span><input id="fwRuleV" type="number" value="0.2" min="0.05" max="2" step="0.05"></label>
+              <label><span>Verstärkung K (ω = K·angle)</span><input id="fwRuleK" type="number" value="1.5" min="0.1" max="10" step="0.1"></label>
+              <label><span>Umschaltradius [m]</span><input id="fwRuleTol" type="number" value="0.1" min="0.02" max="2" step="0.01"></label>
+              <label><span>ω im Zielzustand [rad/s]</span><input id="fwRuleWg" type="number" value="0.3" min="-2" max="2" step="0.1"></label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3><label class="chk inline-h"><input type="checkbox" id="fwUsePP" checked> <span class="dot-sw" style="--c:#2a78d6"></span> Pure Pursuit</label></h3>
+            <div class="grid2">
+              <label><span>v [m/s]</span><input id="fwPPV" type="number" value="0.2" min="0.05" max="2" step="0.05"></label>
+              <label><span>Lookahead [m]</span><input id="fwPPL" type="number" value="0.5" min="0.05" max="5" step="0.05"></label>
+              <label><span>ω<sub>max</sub> [rad/s]</span><input id="fwPPW" type="number" value="1.5" min="0.1" max="10" step="0.1"></label>
+              <label><span>Zieltoleranz [m]</span><input id="fwPPTol" type="number" value="0.1" min="0.02" max="2" step="0.01"></label>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>Simulation</h3>
+            <div class="grid2">
+              <label><span>Abtastzeit Regler [s]</span><input id="fwTs" type="number" value="0.05" min="0.005" max="1" step="0.005"></label>
+              <label><span>Max. Dauer [s]</span><input id="fwTmax" type="number" value="900" min="5" max="3000" step="5"></label>
+              <label><span>ω-Begrenzung Antrieb [rad/s]</span><input id="fwWlim" type="number" value="0" min="0" max="20" step="0.1" title="0 = keine Begrenzung"></label>
+              <label><span>Robotergröße Ø [m]</span><input id="fwRobot" type="number" value="0.2" min="0.05" max="1" step="0.05"></label>
+            </div>
+            <p class="hint">ω-Begrenzung 0 = unbegrenzt (wie im Stateflow-Modell). Wände blockieren die Fahrt; Kontakte werden gezählt.</p>
+          </div>
+        </aside>
+
+        <div class="center">
+          <div class="toolbar">
+            <button id="fwStart" class="btn go">▶ Start</button>
+            <button id="fwReset" class="btn">Zurücksetzen</button>
+            <label class="inline-sel">Tempo
+              <select id="fwSpeed"><option value="0.5">0,5×</option><option value="1">1×</option><option value="2">2×</option><option value="5" selected>5×</option><option value="10">10×</option><option value="0">sofort</option></select>
+            </label>
+            <span class="spacer"></span>
+            <label class="chk"><input type="checkbox" id="fwShowHelpers" checked> Ziel-/Lookahead-Punkte</label>
+          </div>
+          <div class="canvas-wrap map-wrap fw-wrap">
+            <canvas id="fwCanvas" aria-label="Karte mit Wegpunkten"></canvas>
+            <div class="hud" id="fwHud"></div>
+          </div>
+          <div class="legend">
+            <span><i class="sw line dashed" style="--c:#8a8984"></i>Referenz (Wegpunkte verbunden)</span>
+            <span><i class="sw dotwp"></i>Wegpunkt</span>
+            <span><i class="sw line" style="--c:#eb6834"></i>Regelbasiert</span>
+            <span><i class="sw line" style="--c:#2a78d6"></i>Pure Pursuit</span>
+            <span><i class="sw ring" style="border-color:#eb6834"></i>aktueller Zielpunkt</span>
+            <span><i class="sw dotm" style="--mline:#2a78d6"></i>Lookahead-Punkt</span>
+          </div>
+          <div class="plots-head">
+            <h3>Verläufe</h3>
+            <div class="legend inline">
+              <span><i class="sw line" style="--c:#eb6834"></i>Regelbasiert</span>
+              <span><i class="sw line" style="--c:#2a78d6"></i>Pure Pursuit</span>
+            </div>
+            <span class="spacer"></span>
+            <label class="inline-sel">Zeitfenster
+              <select id="fwWin"><option value="30">30 s</option><option value="60">60 s</option><option value="0" selected>gesamt</option></select>
+            </label>
+          </div>
+          <div class="plots">
+            <canvas id="fwPlotCt"></canvas>
+            <canvas id="fwPlotV"></canvas>
+            <canvas id="fwPlotW"></canvas>
+          </div>
+        </div>
+
+        <aside class="panel">
+          <div class="card">
+            <h3>Vergleich (aktueller Lauf)</h3>
+            <div class="table-wrap">
+              <table id="fwCmp">
+                <thead><tr><th>Kennzahl</th><th class="num"><span class="dot-sw" style="--c:#eb6834"></span>Regelbasiert</th><th class="num"><span class="dot-sw" style="--c:#2a78d6"></span>Pure Pursuit</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+            <p class="hint">Bestwert fett. Querabweichung = Abstand zur Verbindungslinie der Wegpunkte (bis zum Erreichen des Ziels).</p>
+          </div>
+          <div class="card grow">
+            <div class="card-head">
+              <h3>Bisherige Läufe</h3>
+              <button id="fwHistClear" class="btn small">Löschen</button>
+            </div>
+            <div class="table-wrap">
+              <table id="fwHist">
+                <thead><tr><th>#</th><th>Regler</th><th>Karte</th><th class="num">Fahrzeit s</th><th class="num">⌀ Querabw. cm</th><th class="num">max cm</th><th class="num">Kont.</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="card">
+            <h3>Regelbasiert (Stateflow)</h3>
+            <pre class="code">FollowWaypoints
+  entry:  goalPoint = waypoints(idx,:)
+  during: [angle,range] = trackGoal(goalPoint)
+          w = K·angle,  v = const
+[range &lt; tol]
+  idx == numPts → ReachedGoal
+  sonst         → idx = idx + 1
+ReachedGoal
+  entry:  v = 0;  w = ω_Ziel</pre>
+            <p class="hint">Pure Pursuit: Lookahead-Punkt im Abstand L auf der Wegpunkt-Polylinie, ω = 2·v·sin(α)/L, begrenzt auf ω<sub>max</sub>.</p>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <div class="tooltip" id="tooltip" hidden></div>
+
+  <script src="js/util.js"></script>
+  <script src="js/map-atrium.js"></script>
+  <script src="js/maps.js"></script>
+  <script src="js/planners.js"></script>
+  <script src="js/controller.js"></script>
+  <script src="js/view.js"></script>
+  <script src="js/tab-planning.js"></script>
+  <script src="js/slam.js"></script>
+  <script src="js/tab-teleop.js"></script>
+  <script src="js/tab-slam.js"></script>
+  <script src="js/follow.js"></script>
+  <script src="js/tab-follow.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>
