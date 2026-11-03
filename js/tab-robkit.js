@@ -15,8 +15,8 @@
     telem:   "00000001-000a-11e1-ac36-0002a5d5c51b",
     cmd:     "00000002-000a-11e1-ac36-0002a5d5c51b",
   };
-  const PKT = { STATE: 0x01, TOF: 0x02, PARAM: 0x03, WP_ACK: 0x04, HEADING: 0x05 };
-  const CMD = { MODE: 0x10, JOY: 0x11, ODOM_RESET: 0x12, STREAM: 0x13, PARAM_SET: 0x20, PARAM_GET: 0x21,
+  const PKT = { STATE: 0x01, TOF: 0x02, PARAM: 0x03, WP_ACK: 0x04, HEADING: 0x05, CAMERA: 0x06 };
+  const CMD = { MODE: 0x10, JOY: 0x11, ODOM_RESET: 0x12, STREAM: 0x13, CAMERA: 0x14, PARAM_SET: 0x20, PARAM_GET: 0x21,
                 WP_CLEAR: 0x30, WP_SET: 0x31, WP_COMMIT: 0x32 };
   const MODE_NAMES = ["Stopp", "Fernsteuerung", "Autopilot", "Follow me", "Wegpunkte"];
   const NAV_NAMES = ["aus", "vorwärts", "drehen", "zurück"];
@@ -31,6 +31,7 @@
     joy: (s, st) => [CMD.JOY, s & 0xff, st & 0xff],
     odomReset: () => [CMD.ODOM_RESET],
     stream: (hz) => [CMD.STREAM, hz > 0 ? 1 : 0, Math.max(1, hz)],
+    camera: (on) => [CMD.CAMERA, on ? 1 : 0],
     paramSet: (id, v) => { const b = new DataView(new ArrayBuffer(6)); b.setUint8(0, CMD.PARAM_SET); b.setUint8(1, id); b.setFloat32(2, v, true); return new Uint8Array(b.buffer); },
     paramGet: (id) => [CMD.PARAM_GET, id],
     wpClear: () => [CMD.WP_CLEAR],
@@ -244,6 +245,7 @@
         case CMD.JOY: this.joy = [dv.getInt8(1), dv.getInt8(2)]; break;
         case CMD.ODOM_RESET: this.origin = { ...this.est }; break;
         case CMD.STREAM: this.tofHz = m[1] ? m[2] : 0; break;
+        case CMD.CAMERA: this.camOn = !!m[1]; break;
         case CMD.PARAM_SET: if (m[1] < this.params.length) { this.params[m[1]][1] = dv.getFloat32(2, true); this.sendParam(m[1]); } break;
         case CMD.PARAM_GET: if (m[1] === 0xff) this.params.forEach((_, i) => this.sendParam(i)); else this.sendParam(m[1]); break;
         case CMD.WP_CLEAR: this.wpEdit = []; break;
@@ -367,6 +369,7 @@
       const now = this.t * 1000;
       if (now - this.lastState >= 100) { this.lastState = now; this.sendState(front); sim.sample(this); }
       if (this.tofHz > 0 && now - this.lastTof >= 1000 / this.tofHz) { this.lastTof = now; this.sendTof(scan); }
+      if (this.camOn && !(now - this.lastCam < 1000)) { this.lastCam = now; this.sendCamera(); }
     }
     randomTurn() {
       const a = (45 + Math.random() * 135) * Math.PI / 180;     // RK.RandTurnMin ... RK.RandTurnMax
@@ -424,6 +427,22 @@
       h.setUint8(9, 1 | (this.cfg.heading !== "enc" ? 2 : 0));
       this.emit(h);
     }
+    // simulated camera (60 deg, 8 cm above the floor): walls 40 cm high, darker with distance, light floor
+    sendCamera() {
+      const p = this.p, fov = 60 * Math.PI / 180, f = CAM_W / 2 / Math.tan(fov / 2), hor = CAM_H / 2, img = new Uint8Array(CAM_W * CAM_H);
+      for (let c = 0; c < CAM_W; c++) {
+        const da = fov / 2 - (c + 0.5) / CAM_W * fov, d = Math.max(5, this.ray(p.x, p.y, p.psi + da) * Math.cos(da));
+        const base = hor + f * 8 / d, top = hor - f * 32 / d, wall = Math.max(3, Math.min(13, 13 - d / 35));
+        for (let r = 0; r < CAM_H; r++) img[r * CAM_W + c] = r >= base ? Math.min(15, 8 + 7 * (r - hor) / hor) : r >= top ? wall : 2;
+      }
+      this.cam = (this.cam + 1) & 0xff || 1;
+      for (let k = 0; k < CAM_PARTS; k++) {
+        const b = new DataView(new ArrayBuffer(20));
+        b.setUint8(0, PKT.CAMERA); b.setUint8(1, this.cam); b.setUint8(2, k); b.setUint8(3, 1);
+        for (let i = 0; i < 16; i++) b.setUint8(4 + i, (Math.round(img[k * 32 + 2 * i]) << 4) | Math.round(img[k * 32 + 2 * i + 1]));
+        this.emit(b);
+      }
+    }
     sendTof(scan) {
       const floor = [57, 34, 23], z = new Uint8Array(64);
       this.rays = [];
@@ -464,6 +483,7 @@
     else if (type === PKT.TOF && dv.byteLength >= 20) onTofPart(dv);
     else if (type === PKT.PARAM && dv.byteLength >= 8) onParam(dv);
     else if (type === PKT.HEADING && dv.byteLength >= 10) onHeading(dv);
+    else if (type === PKT.CAMERA && dv.byteLength >= 20) camera.part(dv);
     else if (type === PKT.WP_ACK && dv.byteLength >= 2) {
       $("wpInfo").textContent = `Übertragen: ${dv.getUint8(1)} Wegpunkte ✓`;
       mission.acked = true;
@@ -1318,6 +1338,46 @@
   }
 
   // ============================================================================
+  // Camera image (VD56G3, monochrome): 80 x 60 pixels, 4 bit, 150 parts per image
+  // (packet 0x06), requested only while the camera view is open (command 0x14)
+  // ============================================================================
+  const CAM_W = 80, CAM_H = 60, CAM_PARTS = 150;
+  const camera = {
+    pix: new Uint8Array(CAM_W * CAM_H), frames: 0, last: 0, rate: 0, dirty: true,
+    get open() { return $("camCard").open; },
+    // view opened or closed, new connection: switch the images on or off
+    request() {
+      if (S.link) S.link.write(cmd.camera(this.open));
+      this.dirty = true;
+    },
+    part(dv) {
+      const k = dv.getUint8(2);
+      if (dv.getUint8(3) !== 1 || k >= CAM_PARTS) return;           // format 1 = 80 x 60, 4 bit
+      for (let i = 0; i < 16; i++) { const b = dv.getUint8(4 + i), o = k * 32 + 2 * i; this.pix[o] = b >> 4; this.pix[o + 1] = b & 15; }
+      if (k === CAM_PARTS - 1) {                                     // image complete
+        const now = performance.now();
+        if (this.last) this.rate = this.rate ? 0.7 * this.rate + 0.3 * 1000 / (now - this.last) : 1000 / (now - this.last);
+        this.last = now; this.frames++;
+      }
+      this.dirty = true;
+    },
+    draw() {
+      if (!this.dirty || !this.open) return;
+      this.dirty = false;
+      const c = $("camCanvas");
+      if (c.width !== CAM_W) { c.width = CAM_W; c.height = CAM_H; }
+      const g = c.getContext("2d"), im = g.createImageData(CAM_W, CAM_H);
+      let lo = 0, hi = 15;
+      if ($("camContrast").checked && this.frames) { lo = 15; hi = 0; for (const v of this.pix) { if (v < lo) lo = v; if (v > hi) hi = v; } }
+      const k = 255 / Math.max(1, hi - lo);
+      this.pix.forEach((v, i) => { const y = Math.max(0, Math.min(255, (v - lo) * k)); im.data.set([y, y, y, 255], 4 * i); });
+      g.putImageData(im, 0, 0);
+      $("camInfo").textContent = !S.link ? "nicht verbunden"
+        : this.frames ? `${this.frames} Bilder, ${this.rate.toFixed(1).replace(".", ",")} Bilder/s` : "warte auf das erste Bild …";
+    },
+  };
+
+  // ============================================================================
   // Parameters
   // ============================================================================
   const params = {
@@ -1469,7 +1529,8 @@
       if (key !== lastWpRender) { lastWpRender = key; renderWps(); }
       ui.mapDirty = true;
     }
-    if ((ui.tab === "control" || ui.tab === "sim") && ui.tofDirty) { drawTof(); ui.tofDirty = false; }
+    if ((ui.tab === "control" || ui.tab === "sim") && ui.tofDirty && $("tofCard").open) { drawTof(); ui.tofDirty = false; }
+    if (ui.tab === "control" || ui.tab === "sim") camera.draw();
     if (ui.tab === "control" && (ui.mapDirty || view.dirty)) { drawMap(); ui.mapDirty = false; }
     if (ui.tab === "sim") { if (ui.mapDirty) { sim.dirty = true; ui.mapDirty = false; } sim.draw(); }
     if (ui.tab === "control" || ui.tab === "sim") traj.draw(now);
@@ -1854,6 +1915,7 @@
       $("connectBtn").textContent = "Trennen"; $("demoBtn").disabled = true; $("connectBtn").disabled = false;
       if (demo) { $("connectBtn").textContent = "Simulation beenden"; sim.attach(link); }
       await link.write(cmd.stream(Number($("tofRate").value)));
+      await link.write(cmd.camera(camera.open));
       await link.write(cmd.paramGet(0xff));
       toast(`Verbunden mit ${name}`);
     } catch (e) {
@@ -1931,6 +1993,9 @@
     if (S.link && p) S.link.write(cmd.paramSet(p.id, Number(b.dataset.v)));
   }));
   $("stopBtn").onclick = stop;
+  $("tofCard").ontoggle = () => { ui.tofDirty = true; };
+  $("camCard").ontoggle = () => camera.request();
+  $("camContrast").onchange = () => { camera.dirty = true; };
   $("tofRate").onchange = () => S.link && S.link.write(cmd.stream(Number($("tofRate").value)));
   $("zoomIn").onclick = () => { view.zoom(1.3); ui.mapDirty = true; };
   $("zoomOut").onclick = () => { view.zoom(1 / 1.3); ui.mapDirty = true; };

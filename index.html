@@ -770,17 +770,30 @@ ReachedGoal
                 </div>
               </div>
               <div class="card">
-                <div class="card-head">
-                  <h3>ToF-Sensor 8×8</h3>
-                  <label class="inline-sel">Bildrate
+                <details id="rkTofCard" class="rk-fold" open>
+                  <summary><h3>ToF-Sensor 8×8</h3></summary>
+                  <canvas id="rkTofCanvas" class="rk-tof"></canvas>
+                  <div class="card-head">
+                    <p class="hint">Zeile 1 = oben, Spalte 1 = links. Werte in cm.</p>
+                    <label class="inline-sel">Bildrate
                     <select id="rkTofRate">
                       <option value="0">aus</option><option value="2">2 Hz</option>
                       <option value="4" selected>4 Hz</option><option value="8">8 Hz</option>
                     </select>
                   </label>
-                </div>
-                <canvas id="rkTofCanvas" class="rk-tof"></canvas>
-                <p class="hint">Zeile 1 = oben, Spalte 1 = links. Werte in cm.</p>
+                  </div>
+                </details>
+              </div>
+              <div class="card">
+                <details id="rkCamCard" class="rk-fold">
+                  <summary><h3>Kamera</h3></summary>
+                  <canvas id="rkCamCanvas" class="rk-cam" title="Nur solange aufgeklappt: ca. 1 Bild/s, 80 × 60 Pixel, 16 Graustufen (Kamera VD56G3, schwarz-weiß)."></canvas>
+                  <div class="card-head">
+                    <p class="hint" id="rkCamInfo">nicht verbunden</p>
+                    <label class="chk"><input type="checkbox" id="rkCamContrast" checked> Kontrast anpassen</label>
+                  </div>
+                  <p class="hint">Nur solange aufgeklappt: ca. 1 Bild/s, 80 × 60 Pixel, 16 Graustufen (Kamera VD56G3, schwarz-weiß).</p>
+                </details>
               </div>
             </div>
             <div class="card c-mapopt">
