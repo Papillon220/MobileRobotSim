@@ -1738,7 +1738,7 @@
   window.addEventListener("gamepaddisconnected", (e) => { if (e.gamepad.index === pad.index) { pad.index = null; pad.active = false; padUi(null); } });
   function padUi(gp) {
     $("padInfo").classList.toggle("on", !!gp);
-    $("padState").textContent = gp ? gp.id.split("(")[0].trim() : "nicht verbunden – per USB oder Bluetooth koppeln und eine Taste drücken";
+    $("padState").textContent = gp ? gp.id.split("(")[0].trim() : "nicht verbunden";
     $("chipPad").hidden = !gp;
   }
   function padTick() {
