@@ -853,7 +853,7 @@ ReachedGoal
                 <button class="btn go" id="rkSimStart">▶ Simulation starten</button>
                 <button class="btn" id="rkSimReset" disabled>Zurück auf Start</button>
                 <label class="inline-sel">Tempo
-                  <select id="rkSimSpeed"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+                  <select id="rkSimSpeed"><option value="0.25">0,25×</option><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option><option value="16">16×</option><option value="32">32×</option></select>
                 </label>
                 <span class="spacer"></span>
                 <button class="btn small" id="rkSimZoomIn" title="Vergrößern">＋</button>
@@ -920,7 +920,8 @@ ReachedGoal
               <div class="grid2">
                 <label class="full">Kurs der Pose<select id="rkSimHeading">
                   <option value="enc" selected>nur Encoder</option>
-                  <option value="gyro">Encoder + Gyroskop</option>
+                  <option value="gyro">nur Gyroskop</option>
+                  <option value="fused">Encoder + Gyroskop (Fusion)</option>
                 </select></label>
                 <label>Radradius-Fehler<select id="rkSimScale">
                   <option value="0">0 %</option><option value="1" selected>1 % (rechts größer)</option><option value="3">3 %</option>
@@ -928,8 +929,9 @@ ReachedGoal
                 <label>Schlupf<select id="rkSimSlip">
                   <option value="0">aus</option><option value="0.03" selected>gering</option><option value="0.08">stark</option>
                 </select></label>
+                <label class="full">Gyro-Offset [°/s]<input type="number" id="rkSimGyroOff" step="0.01" value="0.01"></label>
               </div>
-              <p class="hint">Schlupf und ungleiche Radradien verfälschen vor allem den Kurs aus den Encodern. Mit Gyroskop bleibt der Kurs stabil (kleine Drift). So sieht man, warum die Karte ohne IMU „verdreht“.</p>
+              <p class="hint">Der Weg kommt immer aus den Encodern, der Kurs je nach Auswahl aus den Encodern, nur aus dem Gyroskop oder aus beiden (Fusion: Kurs aus dem Gyroskop, dessen Offset im Stillstand – Encoder melden 0 – geschätzt und abgezogen wird). Schlupf und ungleiche Radradien verfälschen den Encoder-Kurs, der Gyro-Offset lässt den Gyro-Kurs gleichmäßig wegdriften (0,01 °/s ≈ 0,6° je Minute). So sieht man, warum die Karte „verdreht“.</p>
             </div>
             <div class="card c-mapopt">
               <h3>Fehler der Schätzung</h3>

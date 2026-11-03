@@ -209,7 +209,7 @@
         ["WpVel", 10], ["WpLookahead", 20], ["WpTurnAngle", 60], ["WpTol", 5], ["WpStopDist", 150],
         ["PoseSource", 1], ["MagGain", 0], ["NavVariant", 1]];
       this.wpMinRadius = 12;      // RK.WpMinRadius (not tunable)
-      this.rays = [];
+      this.rays = []; this.biasEst = 0;   // gyro offset learned by the fusion (kept when the robot is put back)
       this.configure(sim.settings(), true);
     }
     configure(s, newRoom) {
@@ -221,14 +221,14 @@
       const st = sim.startPose();
       this.p = { x: st.x, y: st.y, psi: st.psi, vl: 0, vr: 0 };   // true pose (cm, rad counter-clockwise)
       this.est = { x: st.x, y: st.y, psi: st.psi };              // estimated pose (world frame)
-      this.psiEnc = st.psi; this.psiGyro = st.psi; this.yawRate = 0;
-      this.origin = { ...this.est }; this.gyroBias = (Math.random() - 0.5) * 2 * 0.3 * Math.PI / 180 / 60;   // up to 0.3 deg/min
+      this.psiEnc = st.psi; this.psiGyro = st.psi; this.psiFus = st.psi; this.yawRate = 0;
+      this.origin = { ...this.est };
       this.dist = 0; sim.clearTrails();
     }
     async connect() {
       let last = performance.now();
       this.timer = setInterval(() => {      // 20 ms steps, several per tick when faster than real time
-        const now = performance.now(), n = Math.min(20, Math.round((now - last) / 20 * this.cfg.speed));
+        const now = performance.now(), n = Math.min(40, Math.round((now - last) / 20 * this.cfg.speed));
         if (n > 0) last = now;
         for (let k = 0; k < n; k++) this.step(0.02);
       }, 20);
@@ -343,13 +343,17 @@
       if (this.ray(p.x, p.y, Math.atan2(ny - p.y, nx - p.x)) > 10 || v < 0) { p.x = nx; p.y = ny; this.dist += Math.abs(v * dt); }
       p.psi += w * dt;
 
-      // estimate: encoders see the wheel rotation (right wheel radius error), heading from encoders or gyro
+      // estimate: encoders see the wheel rotation (right wheel radius error), heading from encoders, gyro or both
       const el = p.vl * dt, er = p.vr * dt / (1 + this.cfg.scale);
       const ed = (el + er) / 2;
       this.psiEnc += (er - el) / TRACK_CM;
-      this.psiGyro += w * dt + (this.gyroBias + (Math.random() - 0.5) * 0.002) * dt;
-      this.yawRate = -w * 180 / Math.PI;
-      this.est.psi = this.cfg.heading === "gyro" ? this.psiGyro : this.psiEnc;
+      const gyro = w + this.cfg.gyroOffset * Math.PI / 180 + (Math.random() - 0.5) * 0.002;    // measured yaw rate with offset and noise
+      this.psiGyro += gyro * dt;
+      // fusion: gyro heading, its offset is learned while the encoders report standstill (time constant 2 s) and subtracted
+      if (Math.abs(el) + Math.abs(er) < 0.01 * dt) this.biasEst += (gyro - this.biasEst) * dt / 2;
+      this.psiFus += (gyro - this.biasEst) * dt;
+      this.yawRate = -gyro * 180 / Math.PI;
+      this.est.psi = { enc: this.psiEnc, gyro: this.psiGyro, fused: this.psiFus }[this.cfg.heading];
       this.est.x += ed * Math.cos(this.est.psi); this.est.y += ed * Math.sin(this.est.psi);
       this.cnt = (this.cnt + 1) & 0xff;
 
@@ -403,9 +407,9 @@
       const ref = this.origin ? this.origin.psi : 0, deg = (psi) => -wrap180((psi - ref) * 180 / Math.PI);
       const h = new DataView(new ArrayBuffer(14));
       h.setUint8(0, PKT.HEADING);
-      h.setInt16(1, Math.round(deg(this.psiEnc) * 10), true); h.setInt16(3, Math.round(deg(this.psiGyro) * 10), true);
+      h.setInt16(1, Math.round(deg(this.psiEnc) * 10), true); h.setInt16(3, Math.round(deg(this.est.psi) * 10), true);
       h.setInt16(5, Math.round((deg(this.p.psi) + (Math.random() - 0.5) * 6) * 10), true); h.setInt16(7, Math.round(this.yawRate * 10), true);
-      h.setUint8(9, 1 | (this.cfg.heading === "gyro" ? 2 : 0));
+      h.setUint8(9, 1 | (this.cfg.heading !== "enc" ? 2 : 0));
       this.emit(h);
     }
     sendTof(scan) {
@@ -1318,7 +1322,7 @@
     world2odo(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi), dx = x - o.x, dy = y - o.y; return { x: c * dx + s * dy, y: -s * dx + c * dy }; },
     settings() {
       return { room: $("simRoom").value, heading: $("simHeading").value, scale: Number($("simScale").value) / 100,
-        slip: Number($("simSlip").value), speed: Number($("simSpeed").value) };
+        slip: Number($("simSlip").value), speed: Number($("simSpeed").value), gyroOffset: Number($("simGyroOff").value) || 0 };
     },
     // start pose from the fields (m, deg) in cm and rad
     startPose() {
@@ -1431,7 +1435,7 @@
       $("simErrTh").textContent = `${eTh.toFixed(1)}°`;
       $("simDist").textContent = `${(l.dist / 100).toFixed(2)} m`;
       const [mt, mc] = missionText();
-      st.textContent = `${mt} · Schätzfehler ${ePos.toFixed(0)} cm / ${eTh.toFixed(1)}° · ${l.cfg.heading === "gyro" ? "Kurs aus Gyro" : "Kurs aus Encodern"}`;
+      st.textContent = `${mt} · Schätzfehler ${ePos.toFixed(0)} cm / ${eTh.toFixed(1)}° · ${{ enc: "Kurs aus Encodern", gyro: "Kurs aus Gyro", fused: "Kurs aus Encoder + Gyro" }[l.cfg.heading]}`;
       st.className = `map-status map-status-bar ${mc || (Math.abs(eTh) > 10 || ePos > 20 ? "warn" : "ok")}`;
       this.dirty = false;
     },
@@ -1766,7 +1770,7 @@
       toast(`Eigene Karte geladen: ${w.length} Wände`);
     } catch (err) { toast(`Karte nicht lesbar: ${err.message}`, 5000); }
   };
-  ["simRoom", "simHeading", "simScale", "simSlip", "simSpeed"].forEach((id) => ($(id).onchange = () => { if (id === "simRoom") sim.roomChanged(); sim.applySettings(id); }));
+  ["simRoom", "simHeading", "simScale", "simSlip", "simGyroOff", "simSpeed"].forEach((id) => ($(id).onchange = () => { if (id === "simRoom") sim.roomChanged(); sim.applySettings(id); }));
   window.addEventListener("resize", () => { ui.mapDirty = ui.tofDirty = true; sim.dirty = replay.dirty = true; });
   // light / dark: switch in the header of MobileRobotSim (js/main.js); colours from the CSS variables
   function themeChanged() {
