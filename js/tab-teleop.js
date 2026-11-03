@@ -495,7 +495,7 @@
   /* --------------------------------- Zeichnen ---------------------------------- */
   function draw() {
     if (!view) return;
-    view.begin('#fcfcfb');
+    view.begin();
     view.axes(true);
     const g = view.ctx;
     // Ursprungsachsen hervorheben
@@ -504,7 +504,7 @@
     g.moveTo(view.X(view.x0), view.Y(0)); g.lineTo(view.X(view.x0 + view.w), view.Y(0));
     g.moveTo(view.X(0), view.Y(view.y0)); g.lineTo(view.X(0), view.Y(view.y0 + view.h));
     g.stroke();
-    view.poseMarker([0, 0, S.startTh], 'start', '#2b2a28');
+    view.poseMarker([0, 0, S.startTh], 'start', COLORS.marker);
     const tw = parseFloat($('tTrack').value) || 0.2;
     if (S.fpose) {
       view.polyline(S.fpath, COLORS.faulty, 2, [6, 4]);

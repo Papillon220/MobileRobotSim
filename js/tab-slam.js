@@ -34,6 +34,10 @@
     vMap = new MRS.WorldView($('slMapCv'), { margin: { l: 38, r: 10, t: 10, b: 28 } });
     vWorld.onResize = draw;
     vMap.onResize = draw;
+    // Zoom und Verschieben in beiden Karten gleich (gleiche Welt, gleiche Kartengröße)
+    const couple = (from, to) => () => { to.k = from.k; to.a = from.a; to.b = from.b; to._fit(); draw(); };
+    vWorld.onZoom = couple(vWorld, vMap);
+    vMap.onZoom = couple(vMap, vWorld);
     const mk = (id, title, unit, series) => new MRS.TimePlot($(id), { title, unit, series });
     plots = {
       e: mk('slPlotE', 'Positionsfehler', 'm', [{ label: 'Schätzung', color: C_EST }, { label: 'Odometrie', color: C_ODO, dash: [6, 4] }]),
@@ -134,6 +138,7 @@
     S.sim = new MRS.SlamSim(S.world, S.def.start, cfgFromUI(), 7);
     S.v = S.w = 0;
     S.mapImg = null; S.mapImgVersion = -1;
+    vWorld.resetZoom(); vMap.resetZoom();
     vWorld.setWorld(0, 0, S.world.width, S.world.height);
     vMap.setWorld(0, 0, S.world.width, S.world.height);
     makeDriver();
@@ -334,16 +339,14 @@
       [x0, y0, x1, y1] = [Math.max(0, g.dirty[0]), Math.max(0, g.dirty[1]), Math.min(W - 1, g.dirty[2]), Math.min(H - 1, g.dirty[3])];
     }
     g.dirty = null;
-    const d = S.mapImgData.data, L = g.L;
+    const d = S.mapImgData.data, L = g.L, P = COLORS.slam;
     for (let iy = y0; iy <= y1; iy++)
       for (let ix = x0; ix <= x1; ix++) {
         const l = L[iy * W + ix];
-        // unbekannt = Grau, frei → weiß, belegt → schwarz (wie flipud(gray) im MATLAB-Skript)
-        let v;
-        if (l < 0) v = 200 + 55 * Math.min(1, -l / 2);
-        else v = 200 * (1 - Math.min(1, l / 2.5));
+        // unbekannt = Grau, frei → weiß, belegt → schwarz (wie flipud(gray) im MATLAB-Skript; dunkel umgekehrt)
+        const w = l < 0 ? Math.min(1, -l / 2) : Math.min(1, l / 2.5), to = l < 0 ? P.free : P.occ;
         const o = ((H - 1 - iy) * W + ix) * 4;
-        d[o] = v; d[o + 1] = v; d[o + 2] = l === 0 ? v - 4 : v; d[o + 3] = 255;
+        d[o] = P.unk[0] + (to[0] - P.unk[0]) * w; d[o + 1] = P.unk[1] + (to[1] - P.unk[1]) * w; d[o + 2] = P.unk[2] + (to[2] - P.unk[2]) * w; d[o + 3] = 255;
       }
     if (x1 >= x0 && y1 >= y0) S.mapImg.getContext('2d').putImageData(S.mapImgData, 0, 0, x0, H - 1 - y1, x1 - x0 + 1, y1 - y0 + 1);
     S.mapImgVersion = g.version;
@@ -557,6 +560,12 @@
 
   MRS.SlamTab = {
     init,
+    // helle/dunkle Darstellung: Kartenbilder neu erzeugen
+    onTheme() {
+      for (const o of Object.values(S.worlds)) o.img = MRS.renderMapImage(o.world, null);
+      if (S.def) S.worldImg = S.worlds[S.def.id].img;
+      S.mapImg = null;
+    },
     state: () => S, // für Tests/Fehlersuche
     setActive(a) {
       S.active = a;

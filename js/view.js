@@ -21,8 +21,25 @@
     muted: '#6f6d68',
     ink: '#0b0b0b',
     robot: '#1c5cab',
-    series: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948']
+    series: ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#6250d6', '#e34948'],
+    surface: '#fcfcfb',     // Hintergrund der Zeichenflächen
+    marker: '#2b2a28',      // Start-/Zielmarker, Räder
+    halo: 'rgba(255,255,255,0.9)',
+    hud: 'rgba(255,255,255,0.85)',
+    tip: 'rgba(255,255,255,0.96)',
+    tipLine: 'rgba(11,11,11,0.15)',
+    slam: { unk: [200, 200, 196], free: [255, 255, 255], occ: [0, 0, 0] } // SLAM-Karte: unbekannt, frei, belegt
   });
+  const LIGHT = { ...C, slam: { ...C.slam } };
+  const DARK = {
+    planned: '#4cbb6c', driven: '#ef6b6a', faulty: '#9a988f', explored: [52, 92, 140], mline: '#e87ba4',
+    wall: '#e6e5df', inflated: '#3a3b40', free: '#2a2b2f', grid: '#2c2d31', axis: '#4a4b51', muted: '#9a988f', ink: '#ececea',
+    robot: '#5b9be8', surface: '#18191b', marker: '#d8d7d1',
+    halo: 'rgba(24,25,27,0.9)', hud: 'rgba(28,29,32,0.85)', tip: 'rgba(28,29,32,0.96)', tipLine: 'rgba(255,255,255,0.18)',
+    slam: { unk: [68, 69, 74], free: [42, 43, 47], occ: [230, 229, 223] }
+  };
+  /** Helle oder dunkle Zeichenfarben (Umschalter in der Kopfzeile, js/main.js). */
+  MRS.setPalette = (dark) => Object.assign(C, LIGHT, dark ? DARK : {});
 
   function niceStep(span, target) {
     const raw = span / Math.max(1, target);
@@ -40,9 +57,48 @@
       this.m = { l: 44, r: 14, t: 12, b: 32, ...(opts.margin || {}) };
       this.x0 = 0; this.y0 = 0; this.w = 10; this.h = 10;
       this.onResize = null;
+      // Zoom (Mausrad, um den Mauszeiger) und Verschieben (rechte/mittlere Maustaste ziehen):
+      // Bildschirmtransformation k, a, b über der eingepassten Darstellung
+      this.k = 1; this.a = 0; this.b = 0;
+      this.onZoom = null;
+      canvas.addEventListener('wheel', (e) => {
+        if (e.defaultPrevented) return; // z. B. Startausrichtung per Mausrad (Pfadfolgeregelung)
+        e.preventDefault();
+        const r = canvas.getBoundingClientRect();
+        this.zoomAt(e.clientX - r.left, e.clientY - r.top, e.deltaY < 0 ? 1.2 : 1 / 1.2);
+      }, { passive: false });
+      let pan = null;
+      canvas.addEventListener('pointerdown', (e) => {
+        if (e.button !== 1 && e.button !== 2) return;
+        e.preventDefault();
+        pan = [e.clientX, e.clientY];
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* Zeiger bereits weg */ }
+      });
+      canvas.addEventListener('pointermove', (e) => {
+        if (!pan || this.k === 1) return;
+        this.a += e.clientX - pan[0]; this.b += e.clientY - pan[1];
+        pan = [e.clientX, e.clientY];
+        this._fit(); this._changed();
+      });
+      for (const ev of ['pointerup', 'pointercancel']) canvas.addEventListener(ev, () => { pan = null; });
+      canvas.addEventListener('contextmenu', (e) => e.preventDefault());
       new ResizeObserver(() => this.resize()).observe(canvas);
       this.resize();
     }
+
+    /** Zoomt um den Bildschirmpunkt (px, py); Faktor 1 = eingepasste Gesamtansicht. */
+    zoomAt(px, py, f) {
+      const k = Math.min(60, Math.max(1, this.k * f));
+      if (k === 1) { this.k = 1; this.a = 0; this.b = 0; } else {
+        f = k / this.k;
+        this.a = px - f * (px - this.a); this.b = py - f * (py - this.b); this.k = k;
+      }
+      this._fit(); this._changed();
+    }
+
+    resetZoom() { this.k = 1; this.a = 0; this.b = 0; this._fit(); }
+
+    _changed() { if (this.onZoom) this.onZoom(); else if (this.onResize) this.onResize(); }
 
     setWorld(x0, y0, w, h) {
       this.x0 = x0; this.y0 = y0; this.w = w; this.h = h;
@@ -63,21 +119,31 @@
 
     _fit() {
       const m = this.m, aw = this.cw - m.l - m.r, ah = this.ch - m.t - m.b;
-      this.s = Math.max(1e-6, Math.min(aw / this.w, ah / this.h));
-      this.ox = m.l + (aw - this.w * this.s) / 2 - this.x0 * this.s;
-      this.oy = m.t + (ah - this.h * this.s) / 2 + (this.h + this.y0) * this.s;
+      const s = Math.max(1e-6, Math.min(aw / this.w, ah / this.h));
+      const ox = m.l + (aw - this.w * s) / 2 - this.x0 * s;
+      const oy = m.t + (ah - this.h * s) / 2 + (this.h + this.y0) * s;
+      this.s = s * this.k; this.ox = this.a + this.k * ox; this.oy = this.b + this.k * oy;
     }
 
     X(x) { return this.ox + x * this.s; }
     Y(y) { return this.oy - y * this.s; }
     toWorld(px, py) { return [(px - this.ox) / this.s, (this.oy - py) / this.s]; }
 
-    begin(bg = '#fcfcfb') {
+    begin(bg = C.surface) {
       const g = this.ctx;
+      if (this._clip) { g.restore(); this._clip = false; } // Begrenzung des vorigen Bildes aufheben
       g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
       g.fillStyle = bg;
       g.fillRect(0, 0, this.cw, this.ch);
+      // vergrößert: Inhalt auf die Zeichenfläche begrenzen, Ränder bleiben für die Achsen frei
+      this._clip = this.k > 1;
+      if (this._clip) { g.save(); this._clipRect(g); }
       return g;
+    }
+
+    _clipRect(g) {
+      const m = this.m;
+      g.beginPath(); g.rect(m.l, m.t, this.cw - m.l - m.r, this.ch - m.t - m.b); g.clip();
     }
 
     image(img, x0, y0, w, h, smooth = false) {
@@ -90,15 +156,20 @@
     /** Achsen mit Teilstrichen in Metern; grid = true zeichnet Gitterlinien. */
     axes(grid = false) {
       const g = this.ctx;
-      const xs = this.X(this.x0), xe = this.X(this.x0 + this.w), ys = this.Y(this.y0), ye = this.Y(this.y0 + this.h);
-      const st = niceStep(Math.max(this.w, this.h), Math.max(4, Math.min(12, (xe - xs) / 70)));
+      if (this._clip) { g.restore(); this._clip = false; }
+      // sichtbarer Ausschnitt der Welt (bei Zoom kleiner als die ganze Welt)
+      const m = this.m, [vx0, vy1] = this.toWorld(m.l, m.t), [vx1, vy0] = this.toWorld(this.cw - m.r, this.ch - m.b);
+      const wx0 = Math.max(this.x0, vx0), wx1 = Math.min(this.x0 + this.w, vx1);
+      const wy0 = Math.max(this.y0, vy0), wy1 = Math.min(this.y0 + this.h, vy1);
+      const xs = this.X(wx0), xe = this.X(wx1), ys = this.Y(wy0), ye = this.Y(wy1);
+      const st = niceStep(Math.max(wx1 - wx0, wy1 - wy0), Math.max(4, Math.min(12, (xe - xs) / 70)));
       g.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
       g.fillStyle = C.muted;
       g.strokeStyle = grid ? C.grid : C.axis;
       g.lineWidth = 1;
       g.textAlign = 'center'; g.textBaseline = 'top';
-      const dec = st < 1 ? 1 : 0;
-      for (let v = Math.ceil(this.x0 / st) * st; v <= this.x0 + this.w + 1e-9; v += st) {
+      const dec = st < 0.1 ? 2 : st < 1 ? 1 : 0;
+      for (let v = Math.ceil(wx0 / st) * st; v <= wx1 + 1e-9; v += st) {
         const px = Math.round(this.X(v)) + 0.5;
         g.beginPath();
         if (grid) { g.moveTo(px, ye); g.lineTo(px, ys); } else { g.moveTo(px, ys); g.lineTo(px, ys + 4); }
@@ -106,7 +177,7 @@
         g.fillText(v.toFixed(dec), px, ys + 6);
       }
       g.textAlign = 'right'; g.textBaseline = 'middle';
-      for (let v = Math.ceil(this.y0 / st) * st; v <= this.y0 + this.h + 1e-9; v += st) {
+      for (let v = Math.ceil(wy0 / st) * st; v <= wy1 + 1e-9; v += st) {
         const py = Math.round(this.Y(v)) + 0.5;
         g.beginPath();
         if (grid) { g.moveTo(xs, py); g.lineTo(xe, py); } else { g.moveTo(xs - 4, py); g.lineTo(xs, py); }
@@ -121,11 +192,21 @@
       g.textAlign = 'right'; g.textBaseline = 'middle';
       g.fillText('y [m]', 0, 0);
       g.restore();
+      if (this.k > 1) {
+        g.font = '11px system-ui, -apple-system, "Segoe UI", sans-serif';
+        g.textAlign = 'left'; g.textBaseline = 'top';
+        const txt = `Zoom ${this.k.toFixed(1).replace('.', ',')}× · Verschieben: rechte Maustaste`;
+        const tw = g.measureText(txt).width;
+        g.fillStyle = C.hud; g.fillRect(m.l + 4, m.t + 4, tw + 10, 17);
+        g.fillStyle = C.muted; g.fillText(txt, m.l + 9, m.t + 7);
+      }
+      // Gitterlinien vor dem Inhalt (grid = true): Begrenzung für den folgenden Inhalt wieder setzen
+      if (this.k > 1 && grid) { g.save(); this._clipRect(g); this._clip = true; }
     }
 
     polyline(pts, color, width = 2, dash = null, alpha = 1, halo = false) {
       if (!pts || pts.length < 2) return;
-      if (halo) this.polyline(pts, 'rgba(255,255,255,0.9)', width + 3, dash, alpha);
+      if (halo) this.polyline(pts, C.halo, width + 3, dash, alpha);
       const g = this.ctx;
       g.save();
       g.globalAlpha = alpha;
@@ -159,7 +240,7 @@
       g.lineTo(hx - 6 * Math.cos(p[2] + 0.5), hy + 6 * Math.sin(p[2] + 0.5));
       g.closePath(); g.fill();
       if (kind === 'start') {
-        g.fillStyle = '#ffffff';
+        g.fillStyle = C.free;
         g.beginPath(); g.arc(x, y, 7, 0, 2 * Math.PI); g.fill(); g.stroke();
       } else {
         g.lineWidth = 3;
@@ -179,7 +260,7 @@
       g.translate(x, y);
       g.rotate(-p[2]);
       // Räder
-      g.fillStyle = '#2b2a28';
+      g.fillStyle = C.marker;
       const ww = r * 0.85, wh = r * 0.32;
       g.fillRect(-ww / 2, -r - wh / 2, ww, wh);
       g.fillRect(-ww / 2, r - wh / 2, ww, wh);
@@ -295,7 +376,7 @@
       this.last = [t, arrays, visible];
       const g = this.g, W = this.w, H = this.h, o = this.o;
       g.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
-      g.fillStyle = '#fcfcfb'; g.fillRect(0, 0, W, H);
+      g.fillStyle = C.surface; g.fillRect(0, 0, W, H);
       const m = { l: 46, r: 10, t: 24, b: 22 };
       const pw = W - m.l - m.r, ph = H - m.t - m.b;
       g.font = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -380,7 +461,7 @@
         const lines = [`t = ${t[i].toFixed(2)} s`];
         arrays.forEach((a, k) => {
           if (!visible[k] || !a || a[i] == null) return;
-          g.fillStyle = o.series[k].color; g.strokeStyle = '#fcfcfb'; g.lineWidth = 2;
+          g.fillStyle = o.series[k].color; g.strokeStyle = C.surface; g.lineWidth = 2;
           g.beginPath(); g.arc(px, Y(a[i]), 4, 0, 2 * Math.PI); g.fill(); g.stroke();
           lines.push([o.series[k].label, a[i].toFixed(3), o.series[k].color]);
         });
@@ -389,7 +470,7 @@
         const bh = lines.length * 15 + 8;
         let bx = px + 10; if (bx + tw > W - 4) bx = px - 10 - tw;
         const by = m.t + 4;
-        g.fillStyle = 'rgba(255,255,255,0.96)'; g.strokeStyle = 'rgba(11,11,11,0.15)'; g.lineWidth = 1;
+        g.fillStyle = C.tip; g.strokeStyle = C.tipLine; g.lineWidth = 1;
         g.beginPath(); g.roundRect ? g.roundRect(bx, by, tw, bh, 6) : g.rect(bx, by, tw, bh); g.fill(); g.stroke();
         g.textAlign = 'left'; g.textBaseline = 'middle';
         lines.forEach((l, j) => {

@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   const MRS = window.MRS;
-  const { fmt } = MRS;
+  const { fmt, COLORS } = MRS;
   const $ = (id) => document.getElementById(id);
   const DT = 0.001; // Integrationsschritt des Fahrzeugmodells [s]
   const C_RULE = '#eb6834', C_PP = '#2a78d6', C_REF = '#8a8984', C_WP = '#6250d6';
@@ -44,7 +44,7 @@
     $('fwCanvas').addEventListener('pointerdown', onPointerDown);
     $('fwCanvas').addEventListener('pointermove', onPointerMove);
     for (const ev of ['pointerup', 'pointercancel']) $('fwCanvas').addEventListener(ev, onPointerUp);
-    $('fwCanvas').addEventListener('wheel', onWheel, { passive: false });
+    $('fwCanvas').addEventListener('wheel', onWheel, { passive: false, capture: true }); // vor dem Karten-Zoom
     $('fwStart').addEventListener('click', onStart);
     $('fwReset').addEventListener('click', reset);
     $('fwHistClear').addEventListener('click', () => { S.hist = []; renderHistory(); });
@@ -70,7 +70,7 @@
     S.img = S.worlds[S.def.id].img;
     S.manual = [];
     S.th0 = null;
-    view.setWorld(0, 0, S.world.width, S.world.height);
+    view.resetZoom(); view.setWorld(0, 0, S.world.width, S.world.height);
     waypointsChanged();
   }
 
@@ -303,7 +303,7 @@
         }
         view.robot(a.pose, a.color, tw, 8);
       }
-    } else if (S.wps.length) view.poseMarker([S.wps[0][0], S.wps[0][1], startHeading()], 'start', '#2b2a28');
+    } else if (S.wps.length) view.poseMarker([S.wps[0][0], S.wps[0][1], startHeading()], 'start', COLORS.marker);
     if (th0Editable()) {
       // Ausrichtungspfeil mit Griff an der Spitze
       const a = arrowGeom(), th = startHeading();
@@ -405,6 +405,11 @@
 
   MRS.FollowTab = {
     init,
+    // helle/dunkle Darstellung: Kartenbilder neu erzeugen
+    onTheme() {
+      for (const o of Object.values(S.worlds)) o.img = MRS.renderMapImage(o.world, o.world.inflate(0.1));
+      if (S.def) S.img = S.worlds[S.def.id].img;
+    },
     setActive(a) {
       S.active = a;
       if (a) { view.resize(); for (const p of Object.values(plots)) p._resize(); draw(); drawPlots(); }

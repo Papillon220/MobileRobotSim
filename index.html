@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>MobileRobotSim</title>
   <link rel="stylesheet" href="css/style.css">
+  <script>/* Hell/Dunkel vor dem ersten Zeichnen setzen (Umschalter in der Kopfzeile, js/main.js) */ try { const t = localStorage.getItem('mrs-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) { /* ignorieren */ }</script>
 </head>
 <body>
   <header class="app-header">
@@ -17,10 +18,14 @@
       <button class="tab-btn" role="tab" data-tab="teleop">Manuelle Steuerung & Odometrie</button>
       <button class="tab-btn" role="tab" data-tab="slam">Lidar SLAM</button>
       <button class="tab-btn" role="tab" data-tab="follow">Pfadfolgeregelung</button>
+      <button class="tab-btn" role="tab" data-tab="robkit">ROBKIT1 Control</button>
     </nav>
-    <div class="author">
-      <span class="author-name">Prof. Dr.-Ing. Frank Bender</span>
-      <span class="author-meta">DHBW Stuttgart · Letzte Änderung: <time class="last-modified">–</time> · <span class="version"></span></span>
+    <div class="head-right">
+      <button class="btn small theme-btn" id="themeBtn" title="Darstellung: automatisch (wie das System), hell oder dunkel">◐ Auto</button>
+      <div class="author">
+        <span class="author-name">Prof. Dr.-Ing. Frank Bender</span>
+        <span class="author-meta">DHBW Stuttgart · Letzte Änderung: <time class="last-modified">–</time> · <span class="version"></span></span>
+      </div>
     </div>
   </header>
 
@@ -137,7 +142,7 @@
             <span><i class="sw line" style="--c:var(--driven)"></i>Gefahrene Bahn</span>
             <span><i class="sw ring"></i>Start</span>
             <span><i class="sw cross"></i>Ziel</span>
-            <span><i class="sw box" style="--c:#dcdbd5"></i>Sicherheitszone</span>
+            <span><i class="sw box" style="--c:var(--inflated)"></i>Sicherheitszone</span>
             <span id="legTree"><i class="sw line thin" style="--c:#7aaee8"></i>Suchbaum / Roadmap</span>
             <span id="legMline" hidden><i class="sw line dashed" style="--c:var(--mline)"></i>M-Linie</span>
             <span id="legDt" hidden><i class="sw grad"></i>Distanz zum Ziel (dunkel = nah)</span>
@@ -467,7 +472,7 @@
             <span><i class="sw line" style="--c:#008300"></i>Laserstrahl</span>
             <span><i class="sw dotm"></i>Scan an geschätzter Pose</span>
             <span id="slLegRoute"><i class="sw line dashed" style="--c:#9085e9"></i>Route</span>
-            <span><i class="sw box" style="--c:#c8c8c4"></i>unbekannt</span>
+            <span><i class="sw box" style="--c:var(--map-unk)"></i>unbekannt</span>
           </div>
           <div class="plots-head">
             <h3>Schätzfehler</h3>
@@ -675,9 +680,386 @@ ReachedGoal
         </aside>
       </div>
     </section>
+    <!-- ===================== Reiter 5: ROBKIT1 Control ===================== -->
+    <!-- Roboter ROBKIT1 per Web Bluetooth (oder simuliert): Modi, Karte aus dem ToF-Sensor, Wegpunkte, Aufzeichnung.
+         Element-IDs mit Präfix rk (js/tab-robkit.js) -->
+    <section id="tab-robkit" class="tab" role="tabpanel">
+      <div class="rk-bar">
+        <div class="seg rk-subtabs" id="rkTabs" role="tablist">
+          <button class="active" data-tab="control">Steuerung</button>
+          <button data-tab="sim">Simulation</button>
+          <button data-tab="replay">Replay</button>
+          <button data-tab="plots">Messwerte</button>
+          <button data-tab="params">Parameter</button>
+          <button data-tab="rec">Aufzeichnung</button>
+        </div>
+        <span class="spacer"></span>
+        <div class="rk-chips">
+          <span class="chip" id="rkChipLink">nicht verbunden</span>
+          <span class="chip" id="rkChipMode">Modus <b>–</b></span>
+          <span class="chip" id="rkChipBatt">Akku <b>–</b></span>
+          <span class="chip on" id="rkChipPad" hidden>🎮 Gamepad</span>
+        </div>
+        <button class="btn" id="rkRecHead" title="Aufnahme starten/stoppen (in jedem Unterreiter, Gamepad: L1)">● Aufnahme</button>
+        <button class="btn primary" id="rkConnectBtn" title="Roboter per Web Bluetooth verbinden">Verbinden</button>
+        <button class="btn" id="rkDemoBtn" title="Simulierter Roboter, ohne Hardware (Unterreiter Simulation)">Simulation</button>
+      </div>
+      <p class="hint rk-banner" id="rkBanner" hidden></p>
+
+      <!-- ---------- Steuerung: Modi, Karte, Wegpunkte, Joystick, Zustand, ToF ---------- -->
+      <section class="rk-pane active" data-pane="control">
+        <div class="layout">
+          <aside class="panel" id="rkCtlLeft"></aside>
+          <div class="center" id="rkCtlMain">
+            <div class="rk-group c-map">
+              <div class="toolbar">
+                <button class="btn small" id="rkZoomIn" title="Vergrößern">＋</button>
+                <button class="btn small" id="rkZoomOut" title="Verkleinern">－</button>
+                <label class="chk"><input type="checkbox" id="rkFollow" checked> Roboter folgen</label>
+                <label class="chk"><input type="checkbox" id="rkMapping" checked> Kartierung</label>
+                <span class="spacer"></span>
+                <span class="hint">Ziehen = verschieben, Mausrad/zwei Finger = Zoom, Raster 5 cm</span>
+              </div>
+              <div class="canvas-wrap rk-map-wrap">
+                <canvas id="rkMapCanvas" aria-label="Karte des Roboters"></canvas>
+                <div class="map-status" id="rkMapStatus">nicht verbunden</div>
+              </div>
+              <div class="legend">
+                <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn (Odometrie)</span>
+                <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
+                <span><i class="sw box" style="--c:var(--map-occ)"></i>belegt</span>
+                <span><i class="sw box" style="--c:var(--map-free)"></i>frei</span>
+                <span><i class="sw box" style="--c:var(--map-unk)"></i>unbekannt</span>
+              </div>
+            </div>
+            <!-- Trajektorien unter der Karte; gemeinsam mit dem Unterreiter „Simulation“ -->
+            <div class="rk-group c-plots">
+              <div class="plots-head">
+                <h3>Trajektorien</h3>
+                <div class="legend inline">
+                  <span><i class="sw line" style="--c:var(--map-trail)"></i>geschätzt</span>
+                  <span class="sim-only"><i class="sw line dashed" style="--c:var(--true-trail)"></i>wahr (Simulation)</span>
+                </div>
+                <span class="spacer"></span>
+                <label class="inline-sel">Zeitfenster
+                  <select id="rkTpWin"><option value="30">30 s</option><option value="60" selected>60 s</option><option value="0">gesamt</option></select>
+                </label>
+              </div>
+              <div class="plots">
+                <canvas id="rkTpX"></canvas><canvas id="rkTpY"></canvas><canvas id="rkTpTh"></canvas>
+                <canvas id="rkTpWheels"></canvas><canvas id="rkTpFront"></canvas>
+                <canvas id="rkTpErrPos" class="sim-only"></canvas><canvas id="rkTpErrTh" class="sim-only"></canvas>
+              </div>
+            </div>
+          </div>
+          <aside class="panel" id="rkCtlSide">
+            <div class="rk-group c-info">
+              <div class="card">
+                <h3>Zustand</h3>
+                <div class="stats">
+                  <div class="stat"><span class="k">Modus</span><span class="v" id="rkStMode">–</span></div>
+                  <div class="stat"><span class="k">Autopilot</span><span class="v" id="rkStNav">–</span></div>
+                  <div class="stat"><span class="k">Wegpunkte</span><span class="v" id="rkStWp">–</span></div>
+                  <div class="stat"><span class="k">Abstand vorne</span><span class="v" id="rkStFront">–</span></div>
+                  <div class="stat"><span class="k">Position</span><span class="v" id="rkStPose">–</span></div>
+                  <div class="stat"><span class="k">Räder Soll</span><span class="v" id="rkStCmd">–</span></div>
+                  <div class="stat"><span class="k">Räder Ist (Encoder)</span><span class="v" id="rkStMeas">–</span></div>
+                  <div class="stat"><span class="k">Kurs Pose / Encoder / Kompass</span><span class="v" id="rkStHead">–</span></div>
+                  <div class="stat"><span class="k">Kursquelle</span><span class="v" id="rkStImu">–</span></div>
+                  <div class="stat"><span class="k">Meldungen</span><span class="v" id="rkStFlags">–</span></div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-head">
+                  <h3>ToF-Sensor 8×8</h3>
+                  <label class="inline-sel">Bildrate
+                    <select id="rkTofRate">
+                      <option value="0">aus</option><option value="2">2 Hz</option>
+                      <option value="4" selected>4 Hz</option><option value="8">8 Hz</option>
+                    </select>
+                  </label>
+                </div>
+                <canvas id="rkTofCanvas" class="rk-tof"></canvas>
+                <p class="hint">Zeile 1 = oben, Spalte 1 = links. Werte in cm.</p>
+              </div>
+            </div>
+            <div class="card c-mapopt">
+              <h3>Karte</h3>
+              <div class="btn-row">
+                <button class="btn" id="rkMapClear">Karte löschen</button>
+                <button class="btn" id="rkOdomReset">Odometrie auf 0</button>
+              </div>
+              <div class="btn-row">
+                <button class="btn" id="rkMapPng">Bild (PNG)</button>
+                <button class="btn" id="rkMapCsv">Raster (CSV)</button>
+              </div>
+              <div class="grid2">
+                <label>ToF-Zeilen<select id="rkMapRows">
+                  <option value="4,5" selected>4–5 (waagerecht)</option><option value="3,4,5">3–5</option><option value="2,3,4,5">2–5</option>
+                </select></label>
+                <label>Reichweite<select id="rkMapRange">
+                  <option value="80">80 cm</option><option value="120" selected>120 cm</option><option value="200">200 cm</option>
+                </select></label>
+                <label class="full">Kartengröße<select id="rkMapSize">
+                  <option value="240" selected>12 m × 12 m</option><option value="480">24 m × 24 m</option><option value="960">48 m × 48 m</option>
+                </select></label>
+              </div>
+            </div>
+          </aside>
+        </div>
+
+        <!-- Bedienelemente, die mit dem Unterreiter „Simulation“ geteilt werden (werden in die linke Spalte verschoben) -->
+        <div class="card c-mode">
+          <h3>Modus</h3>
+          <div class="rk-modes" id="rkModeBtns">
+            <button class="btn" data-mode="1">Fernsteuerung</button>
+            <button class="btn" data-mode="2">Autopilot</button>
+            <button class="btn" data-mode="3">Follow me</button>
+            <button class="btn" data-mode="4">Wegpunkte</button>
+          </div>
+          <button class="btn danger" id="rkStopBtn">STOPP</button>
+          <p class="hint">Leertaste = Stopp. Fernsteuerung am PC auch mit Pfeiltasten oder W/A/S/D.</p>
+        </div>
+        <div class="card c-wp">
+          <h3>Wegpunkte</h3>
+          <label class="chk"><input type="checkbox" id="rkWpEdit"> Antippen setzt Wegpunkt</label>
+          <ul class="rk-wplist" id="rkWpList"></ul>
+          <div class="btn-row">
+            <button class="btn primary" id="rkWpSend">Senden &amp; starten</button>
+            <button class="btn" id="rkWpPause" disabled>Pause</button>
+            <button class="btn" id="rkWpClear">Liste leeren</button>
+          </div>
+          <p class="hint" id="rkWpInfo">Koordinaten im Odometrie-System: Start = (0, 0), x nach vorn, y nach links. Erreichte Punkte werden grau.</p>
+        </div>
+        <div class="card c-joy">
+          <h3>Joystick</h3>
+          <div class="rk-joy disabled" id="rkJoy"><div class="rk-knob" id="rkKnob"></div></div>
+          <p class="hint rk-center" id="rkJoyInfo">Nur im Modus Fernsteuerung aktiv</p>
+          <div class="rk-pad" id="rkPadInfo">
+            <b>Gamepad (PS4):</b> <span id="rkPadState">nicht verbunden – per USB oder Bluetooth koppeln und eine Taste drücken</span>
+            <p class="hint">Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller ·
+              ✕ Stopp · ○ Fernsteuerung · □ Autopilot · △ Wegpunkte · Options = Pause/Weiter · L1 = Aufnahme</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- ---------- Simulation: wahre Umgebung und Karte des Roboters ---------- -->
+      <section class="rk-pane" data-pane="sim">
+        <div class="layout">
+          <aside class="panel" id="rkSimLeft"></aside>
+          <div class="center" id="rkSimMain">
+            <div class="rk-group c-map">
+              <div class="toolbar">
+                <button class="btn go" id="rkSimStart">▶ Simulation starten</button>
+                <button class="btn" id="rkSimReset" disabled>Zurück auf Start</button>
+                <label class="inline-sel">Tempo
+                  <select id="rkSimSpeed"><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option><option value="8">8×</option></select>
+                </label>
+                <span class="spacer"></span>
+                <button class="btn small" id="rkSimZoomIn" title="Vergrößern">＋</button>
+                <button class="btn small" id="rkSimZoomOut" title="Verkleinern">－</button>
+                <label class="chk"><input type="checkbox" id="rkSimFollow" checked> Roboter folgen</label>
+              </div>
+              <div class="map-status map-status-bar" id="rkSimStatus">Simulation aus</div>
+              <div class="slam-views">
+                <div>
+                  <div class="view-title">Wahre Umgebung &amp; ToF-Sensor</div>
+                  <div class="canvas-wrap rk-sim-wrap"><canvas id="rkSimCanvas" aria-label="Wahre Umgebung"></canvas></div>
+                </div>
+                <div>
+                  <div class="view-title" title="Belegungsraster aus der geschätzten Pose; an der Startpose in die Welt gelegt">Karte des Roboters (geschätzt)</div>
+                  <div class="canvas-wrap rk-sim-wrap"><canvas id="rkSimEstCanvas" aria-label="Karte des Roboters"></canvas></div>
+                </div>
+              </div>
+              <div class="legend">
+                <span><i class="sw line dashed" style="--c:var(--true-trail)"></i>Wahre Bahn</span>
+                <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn</span>
+                <span><i class="sw box" style="--c:var(--fov)"></i>ToF-Sichtfeld</span>
+                <span><i class="sw line thin" style="--c:var(--ray)"></i>ToF-Strahlen</span>
+                <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
+                <span><i class="sw box" style="--c:var(--map-unk)"></i>unbekannt</span>
+              </div>
+              <p class="hint">Zoomen und Verschieben wirken in beiden Karten gleich. Antippen setzt Wegpunkte (Schalter „Antippen setzt Wegpunkt“), in beiden Karten.</p>
+            </div>
+          </div>
+          <aside class="panel" id="rkSimSide">
+            <div class="card c-mapopt">
+              <h3>Umgebung</h3>
+              <select id="rkSimRoom" aria-label="Umgebung">
+                <option value="lab" selected>Labor 3 × 2 m mit Kisten</option>
+                <option value="atrium">Bürogebäude mit Atrium (108 m × 72 m)</option>
+                <option value="flat">Wohnung (3 Zimmer, Türen)</option>
+                <option value="office">Büro mit Tischen</option>
+                <option value="maze">Labyrinth 4 × 4 m</option>
+                <option value="octagon">Achteckiger Raum mit Säule</option>
+                <option value="corridor">Flur mit Abzweig</option>
+                <option value="parcours">Parcours</option>
+                <option value="empty">Leerer Raum 4 × 3 m</option>
+                <option value="custom" disabled>Eigene Karte (geladen)</option>
+              </select>
+              <p class="hint" id="rkSimRoomDesc"></p>
+              <label>Eigene Karte (JSON)<input type="file" id="rkSimMapFile" accept=".json"></label>
+            </div>
+            <div class="card c-mapopt">
+              <h3>Startpose</h3>
+              <div class="grid3 pose">
+                <span class="pose-lbl">Start</span>
+                <input type="number" id="rkSimStartX" step="0.1" value="0" aria-label="Start x">
+                <input type="number" id="rkSimStartY" step="0.1" value="0" aria-label="Start y">
+                <input type="number" id="rkSimStartTh" step="5" value="0" aria-label="Start θ in Grad">
+                <span></span><span class="sub">x [m]</span><span class="sub">y [m]</span><span class="sub">θ [°]</span>
+              </div>
+              <div class="seg">
+                <button id="rkSimPickStart" title="Klick in die linke Karte setzt die Position, Ziehen mit gedrückter Maustaste die Richtung">Start per Klick</button>
+                <button id="rkSimDefStart" title="Standard-Startpose der Umgebung">Standard</button>
+              </div>
+              <p class="hint">Klick in die Karte „Wahre Umgebung“ setzt die Position, Ziehen mit gedrückter Maustaste die Richtung. Der Roboter wird dorthin gesetzt, Odometrie und Karte beginnen dort neu (0, 0, 0).</p>
+            </div>
+            <div class="card c-mapopt">
+              <h3>Roboter und Sensoren</h3>
+              <div class="grid2">
+                <label class="full">Kurs der Pose<select id="rkSimHeading">
+                  <option value="enc" selected>nur Encoder</option>
+                  <option value="gyro">Encoder + Gyroskop</option>
+                </select></label>
+                <label>Radradius-Fehler<select id="rkSimScale">
+                  <option value="0">0 %</option><option value="1" selected>1 % (rechts größer)</option><option value="3">3 %</option>
+                </select></label>
+                <label>Schlupf<select id="rkSimSlip">
+                  <option value="0">aus</option><option value="0.03" selected>gering</option><option value="0.08">stark</option>
+                </select></label>
+              </div>
+              <p class="hint">Schlupf und ungleiche Radradien verfälschen vor allem den Kurs aus den Encodern. Mit Gyroskop bleibt der Kurs stabil (kleine Drift). So sieht man, warum die Karte ohne IMU „verdreht“.</p>
+            </div>
+            <div class="card c-mapopt">
+              <h3>Fehler der Schätzung</h3>
+              <div class="stats">
+                <div class="stat"><span class="k">Position</span><span class="v" id="rkSimErrPos">–</span></div>
+                <div class="stat"><span class="k">Kurs</span><span class="v" id="rkSimErrTh">–</span></div>
+                <div class="stat"><span class="k">Gefahrene Strecke</span><span class="v" id="rkSimDist">–</span></div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---------- Replay: Aufzeichnung abspielen, Karte neu aufbauen ---------- -->
+      <section class="rk-pane" data-pane="replay">
+        <div class="layout rk-two">
+          <div class="center">
+            <div class="canvas-wrap rk-map-wrap">
+              <canvas id="rkReplayCanvas" aria-label="Replay"></canvas>
+              <div class="map-status" id="rkReplayStatus">Keine Aufzeichnung geladen</div>
+            </div>
+            <div class="toolbar">
+              <button class="btn primary" id="rkRpPlay" disabled>▶ Abspielen</button>
+              <input type="range" id="rkRpSeek" class="rk-seek" min="0" max="1000" value="0" disabled aria-label="Zeitpunkt">
+              <span class="hint" id="rkRpTime">0,0 / 0,0 s</span>
+              <label class="inline-sel">Tempo
+                <select id="rkRpSpeed"><option value="0.5">0,5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="5">5×</option><option value="20">20×</option></select>
+              </label>
+            </div>
+          </div>
+          <aside class="panel">
+            <div class="card">
+              <h3>Aufzeichnung laden</h3>
+              <input type="file" id="rkRpFile" accept=".json,.csv" multiple>
+              <div class="btn-row"><button class="btn" id="rkRpUseCurrent" disabled>Aktuelle Aufnahme</button></div>
+              <p class="hint">Replay-Datei (.json) aus „Aufnahme“ oder die beiden CSV-Dateien (Zustand und ToF) zusammen auswählen. Die Karte wird beim Abspielen aus Pose und ToF-Bildern neu aufgebaut.</p>
+              <div class="stats">
+                <div class="stat"><span class="k">Dauer</span><span class="v" id="rkRpDur">–</span></div>
+                <div class="stat"><span class="k">Zustände / ToF-Bilder</span><span class="v" id="rkRpCount">–</span></div>
+              </div>
+            </div>
+            <div class="card">
+              <h3>Zustand im Replay</h3>
+              <div class="stats">
+                <div class="stat"><span class="k">Modus</span><span class="v" id="rkRpMode">–</span></div>
+                <div class="stat"><span class="k">Position</span><span class="v" id="rkRpPose">–</span></div>
+                <div class="stat"><span class="k">Räder Soll</span><span class="v" id="rkRpCmd">–</span></div>
+                <div class="stat"><span class="k">Räder Ist</span><span class="v" id="rkRpMeas">–</span></div>
+                <div class="stat"><span class="k">Abstand vorne</span><span class="v" id="rkRpFront">–</span></div>
+                <div class="stat"><span class="k">Wegpunkte</span><span class="v" id="rkRpWp">–</span></div>
+              </div>
+              <canvas id="rkRpTof" class="rk-tof small"></canvas>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---------- Messwerte: letzte 30 s ---------- -->
+      <section class="rk-pane" data-pane="plots">
+        <div class="rk-charts">
+          <div class="card"><h3>Radgeschwindigkeit [cm/s]</h3><canvas class="rk-chart" id="rkChWheels"></canvas><div class="legend" id="rkLgWheels"></div></div>
+          <div class="card"><h3>Position [cm]</h3><canvas class="rk-chart" id="rkChPos"></canvas><div class="legend" id="rkLgPos"></div></div>
+          <div class="card"><h3>Kurs θ [°] (+ = rechts): Pose, Encoder, Kompass</h3><canvas class="rk-chart" id="rkChTheta"></canvas><div class="legend" id="rkLgTheta"></div></div>
+          <div class="card"><h3>Abstand vorne [mm]</h3><canvas class="rk-chart" id="rkChFront"></canvas><div class="legend" id="rkLgFront"></div></div>
+        </div>
+        <p class="hint rk-note">Letzte 30 s. „Ist“ wird aus der Encoder-Odometrie des Motorboards berechnet (Spurweite 11,5 cm).</p>
+      </section>
+
+      <!-- ---------- Parameter des Roboters ---------- -->
+      <section class="rk-pane" data-pane="params">
+        <div class="card">
+          <div class="card-head">
+            <h3>Parameter (RK)</h3>
+            <div class="btn-row">
+              <button class="btn" id="rkParamRead">Alle lesen</button>
+              <button class="btn" id="rkParamCopy">Als MATLAB kopieren</button>
+            </div>
+          </div>
+          <div class="table-wrap rk-params">
+            <table>
+              <thead><tr><th>Name</th><th class="num">Roboter</th><th>Neuer Wert</th><th></th></tr></thead>
+              <tbody id="rkParamBody"><tr><td colspan="4" class="hint">Nach dem Verbinden werden die Parameter gelesen.</td></tr></tbody>
+            </table>
+          </div>
+          <p class="hint">Änderungen wirken sofort, gehen aber beim Neustart verloren. Dauerhaft: Werte in <code>matlab/robkit_params.m</code> übernehmen („Als MATLAB kopieren“). NavVariant: 1 = Standard, 2 = Random Turn.</p>
+        </div>
+      </section>
+
+      <!-- ---------- Aufzeichnung: Verläufe, Karte und Bahn der ganzen Aufnahme ---------- -->
+      <section class="rk-pane" data-pane="rec">
+        <div class="card">
+          <div class="card-head">
+            <h3>Aufzeichnung</h3>
+            <div class="toolbar">
+              <button class="btn primary" id="rkRecBtn">● Aufnahme starten</button>
+              <label class="chk"><input type="checkbox" id="rkRecTof" checked> mit ToF-Bildern (Karte)</label>
+            </div>
+          </div>
+          <div class="rk-recstats">
+            <span>Dauer <b id="rkRecDur">0 s</b></span>
+            <span>Zustände <b id="rkRecRows">0</b></span>
+            <span>ToF-Bilder <b id="rkRecFrames">0</b></span>
+          </div>
+          <div class="btn-row">
+            <button class="btn" id="rkRecCsv" disabled>Zustand (CSV)</button>
+            <button class="btn" id="rkRecTofCsv" disabled>ToF (CSV)</button>
+            <button class="btn" id="rkRecJson" disabled>Replay-Datei (JSON)</button>
+            <button class="btn" id="rkRecToReplay" disabled>Im Replay öffnen</button>
+          </div>
+          <p class="hint">Start/Stopp auch über „● Aufnahme“ oben rechts (in jedem Unterreiter) oder L1 am Gamepad. CSV z. B. in MATLAB: <code>T = readtable('robkit_log.csv');</code>, Spalten siehe <code>webapp/PROTOCOL.md</code> im ROBKIT1-Projekt.</p>
+        </div>
+        <div class="rk-charts rk-rec">
+          <div class="card">
+            <h3>Kartierung und Positionsverlauf</h3>
+            <div class="canvas-wrap rk-rec-wrap"><canvas id="rkRecCanvas" aria-label="Karte der Aufnahme"></canvas></div>
+            <div class="legend"><span><i class="sw line" style="--c:var(--map-trail)"></i>Weg</span><span><i class="sw dot" style="--c:var(--go)"></i>Start</span><span><i class="sw dot" style="--c:var(--robot)"></i>Ende / aktuell</span></div>
+          </div>
+          <div class="rk-stack">
+            <div class="card"><h3>Radgeschwindigkeit [cm/s]</h3><canvas class="rk-chart" id="rkRcWheels"></canvas><div class="legend" id="rkRlWheels"></div></div>
+            <div class="card"><h3>Position [cm]</h3><canvas class="rk-chart" id="rkRcPos"></canvas><div class="legend" id="rkRlPos"></div></div>
+          </div>
+          <div class="card"><h3>Kurs θ [°]: Pose, Encoder, Kompass</h3><canvas class="rk-chart" id="rkRcHead"></canvas><div class="legend" id="rkRlHead"></div></div>
+          <div class="card"><h3>Abstand vorne [mm] und Modus</h3><canvas class="rk-chart" id="rkRcFront"></canvas><div class="legend" id="rkRlFront"></div></div>
+        </div>
+      </section>
+    </section>
   </main>
 
   <div class="tooltip" id="tooltip" hidden></div>
+  <div class="toast" id="rkToast" role="status"></div>
 
   <script src="js/util.js"></script>
   <script src="js/map-atrium.js"></script>
@@ -691,6 +1073,7 @@ ReachedGoal
   <script src="js/tab-slam.js"></script>
   <script src="js/follow.js"></script>
   <script src="js/tab-follow.js"></script>
+  <script src="js/tab-robkit.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

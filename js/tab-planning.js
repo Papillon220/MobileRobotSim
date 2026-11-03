@@ -75,7 +75,7 @@
     S.raw = S.mapDef.build(RES);
     S.imgPlain = MRS.renderMapImage(S.raw, null);
     buildInflation();
-    view.setWorld(0, 0, S.raw.width, S.raw.height);
+    view.resetZoom(); view.setWorld(0, 0, S.raw.width, S.raw.height);
     setPoses(S.mapDef.start, S.mapDef.goal);
     invalidatePlan();
   }
@@ -329,7 +329,7 @@
   }
 
   function onMouseDown(e) {
-    if (!S.clickMode || S.running) return;
+    if (!S.clickMode || S.running || e.button !== 0) return; // rechte/mittlere Taste: Karte verschieben
     const p = evWorld(e);
     const [x, y] = p.w;
     if (x < 0 || y < 0 || x > S.raw.width || y > S.raw.height) return;
@@ -449,8 +449,8 @@
       view.polyline(sim.path, COLORS.driven, 1.8);
       if (S.running) view.dot(sim.pp.lookPt, '#eda100', 4);
     }
-    view.poseMarker(S.start, 'start', '#2b2a28');
-    view.poseMarker(S.goal, 'goal', '#2b2a28');
+    view.poseMarker(S.start, 'start', COLORS.marker);
+    view.poseMarker(S.goal, 'goal', COLORS.marker);
     const tw = parseFloat($('trackW').value) || 0.2;
     view.robot(sim ? sim.pose : S.start, COLORS.robot, tw);
     view.axes();
@@ -597,5 +597,15 @@
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
 
-  MRS.PlanningTab = { init, onShow: () => { view.resize(); } };
+  MRS.PlanningTab = {
+    init,
+    onShow: () => { view.resize(); },
+    // helle/dunkle Darstellung: Kartenbilder neu erzeugen
+    onTheme() {
+      if (!S.raw) return;
+      S.imgPlain = MRS.renderMapImage(S.raw, null);
+      S.imgInfl = MRS.renderMapImage(S.raw, S.inflated);
+      S.overlay = null;
+    }
+  };
 })();
