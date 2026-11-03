@@ -1828,7 +1828,7 @@
   // that is shown, so both tabs are operated the same way.
   function placeSharedControls(tab) {
     const toSim = tab === "sim", left = toSim ? $("simLeft") : $("ctlLeft");
-    for (const sel of [".c-mode", ".c-wp", ".c-joy"]) left.appendChild(document.querySelector(`#tab-robkit ${sel}`));
+    for (const sel of [".c-joy", ".c-mode", ".c-wp"]) left.appendChild(document.querySelector(`#tab-robkit ${sel}`));
     const side = toSim ? $("simSide") : $("ctlSide");
     side.insertBefore(document.querySelector("#tab-robkit .c-info"), side.firstChild);
     side.insertBefore(document.querySelector("#tab-robkit .c-loc"), document.querySelector("#tab-robkit .c-info").nextSibling);
