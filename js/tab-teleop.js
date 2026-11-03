@@ -1,5 +1,5 @@
 /* ==========================================================================
-   MobileRobotSim – Reiter 2: Manuelle Steuerung eines Differentialantriebs
+   MobileRobotSim – Reiter 1: Manuelle Steuerung eines Differentialantriebs
    Pfeiltasten bzw. W/A/S/D → (v, ω); optionale Fehlersimulation mit Offset auf ω.
    ========================================================================== */
 (function () {

@@ -4,9 +4,9 @@
 (function () {
   'use strict';
   const MRS = window.MRS;
-  MRS.VERSION = 'V1.6'; // Programmversion (Kopfzeile und Demo-Anzeigen werden beim Start daraus gesetzt)
+  MRS.VERSION = 'V1.7'; // Programmversion (Kopfzeile und Demo-Anzeigen werden beim Start daraus gesetzt)
   const TABS = { plan: MRS.PlanningTab, teleop: MRS.TeleopTab, slam: MRS.SlamTab, follow: MRS.FollowTab, robkit: MRS.RobkitTab };
-  let current = 'plan';
+  let current = 'teleop';
 
   // Datum der letzten Änderung: jüngster Zeitstempel von Seite, Skripten und Stylesheets (Server-Header „Last-Modified“);
   // ohne Webserver (file://) gilt das Änderungsdatum der HTML-Datei
@@ -62,9 +62,9 @@
     MRS.FollowTab.init();
     MRS.RobkitTab.init();
     document.querySelectorAll('.tab-btn').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)));
-    let tab = 'plan';
-    try { tab = localStorage.getItem('mrs-tab') || 'plan'; } catch (e) { /* ignorieren */ }
-    current = tab in TABS ? tab : 'plan';
+    let tab = 'teleop';
+    try { tab = localStorage.getItem('mrs-tab') || 'teleop'; } catch (e) { /* ignorieren */ }
+    current = tab in TABS ? tab : 'teleop';
     applyTheme(t || 'auto');
     document.getElementById('themeBtn').addEventListener('click', () => {
       const cur = document.documentElement.dataset.theme || 'auto';

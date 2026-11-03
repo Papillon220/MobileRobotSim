@@ -1,5 +1,5 @@
 /* ==========================================================================
-   MobileRobotSim – Reiter 1: Bahnplanung, Pure-Pursuit-Pfadverfolgung, Vergleich
+   MobileRobotSim – Reiter 2: Bahnplanung, Pfadfolgeregelung mit Pure Pursuit, Vergleich
    ========================================================================== */
 (function () {
   'use strict';
