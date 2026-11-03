@@ -15,10 +15,11 @@
     telem:   "00000001-000a-11e1-ac36-0002a5d5c51b",
     cmd:     "00000002-000a-11e1-ac36-0002a5d5c51b",
   };
-  const PKT = { STATE: 0x01, TOF: 0x02, PARAM: 0x03, WP_ACK: 0x04, HEADING: 0x05, CAMERA: 0x06 };
+  const PKT = { STATE: 0x01, TOF: 0x02, PARAM: 0x03, WP_ACK: 0x04, HEADING: 0x05, CAMERA: 0x06, LINE: 0x07 };
   const CMD = { MODE: 0x10, JOY: 0x11, ODOM_RESET: 0x12, STREAM: 0x13, CAMERA: 0x14, PARAM_SET: 0x20, PARAM_GET: 0x21,
                 WP_CLEAR: 0x30, WP_SET: 0x31, WP_COMMIT: 0x32 };
-  const MODE_NAMES = ["Stopp", "Fernsteuerung", "Autopilot", "Follow me", "Wegpunkte"];
+  const MODE_NAMES = ["Stopp", "Fernsteuerung", "Autopilot", "Follow me", "Wegpunkte", "Linienfolge"];
+  const LINE_NAMES = ["aus", "folgt der Linie", "sucht die Linie", "Linie verloren", "Hindernis"];
   const NAV_NAMES = ["aus", "vorwärts", "drehen", "zurück"];
   const WP_NAMES = ["aus", "fährt", "fertig", "blockiert"];
   const TRACK_CM = 11.5;      // wheel distance (RK.TrackWidth)
@@ -128,8 +129,29 @@
       const pts = Array.from({ length: 8 }, (_, k) => [150 + 210 * Math.cos((22.5 + 45 * k) * Math.PI / 180), 210 * Math.sin((22.5 + 45 * k) * Math.PI / 180)]);
       return [...pts.map((p, k) => [...p, ...pts[(k + 1) % 8]]), ...box(150, -20, 40, 40)];
     })(),
+    line: rect(-120, -60, 380, 300),
     custom: [],
   };
+  // tape for the line following (mode 5) in the simulation, cm: oval with a wavy straight
+  const LINE_ROWS = [116, 108, 100, 92, 84, 76], LINE_CAM_X = 6, LINE_TAPE_CM = 1.9;   // as RK.LfRows, RK.LfCamX, RK.LfTapeWidth
+  const SIM_TAPES = {
+    line: (() => {
+      const P = [];
+      for (let x = 0; x <= 250; x += 10) P.push([x, 0]);
+      for (let a = -80; a <= 90; a += 10) P.push([250 + 80 * Math.cos(a * Math.PI / 180), 80 + 80 * Math.sin(a * Math.PI / 180)]);
+      for (let x = 240; x >= 0; x -= 10) P.push([x, 160 + 25 * Math.sin(x / 250 * 2 * Math.PI)]);
+      for (let a = 100; a <= 270; a += 10) P.push([80 * Math.cos(a * Math.PI / 180), 80 + 80 * Math.sin(a * Math.PI / 180)]);
+      return P;
+    })(),
+  };
+  function distToTape(x, y, P) {
+    let d = Infinity;
+    for (let i = 1; i < P.length; i++) {
+      const [ax, ay] = P[i - 1], ex = P[i][0] - ax, ey = P[i][1] - ay, u = Math.max(0, Math.min(1, ((x - ax) * ex + (y - ay) * ey) / (ex * ex + ey * ey)));
+      d = Math.min(d, Math.hypot(x - ax - u * ex, y - ay - u * ey));
+    }
+    return d;
+  }
 
   // Office building with atrium: occupancy grid MRS.ATRIUM_MAP (js/map-atrium.js)
   class GridWorld {
@@ -189,13 +211,15 @@
     corridor: { desc: "Flur mit Abzweig nach links." },
     parcours: { desc: "Parcours mit Trennwänden und Hindernissen." },
     empty: { desc: "Leerer Raum 4 m × 3 m." },
+    line: { desc: "Raum 5 m × 3,6 m mit einem Rundkurs aus schwarzem Klebeband (Kurven mit 80 cm Radius, Wellenlinie) für die Linienfolge: Modus „Linienfolge“ wählen.",
+      start: { x: 0, y: 0, psi: 0 } },
     custom: { desc: "Eigene Karte aus einer JSON-Datei." },
   };
   let atriumWorld = null;
   function simRoom(id) {
     const start = (SIM_INFO[id] && SIM_INFO[id].start) || { x: 0, y: 0, psi: 0 };
     if (id === "atrium") return { world: atriumWorld || (atriumWorld = new GridWorld(MRS.ATRIUM_MAP)), start };
-    return { walls: SIM_ROOMS[id] || SIM_ROOMS.lab, start };
+    return { walls: SIM_ROOMS[id] || SIM_ROOMS.lab, start, tape: SIM_TAPES[id] || null };
   }
 
   class DemoLink {
@@ -208,14 +232,15 @@
         ["Kv", 0.02], ["Ksteer", 3], ["Wturn", 6], ["TurnTimeout", 4], ["CliffDist", 350], ["BackTime", 0.8], ["Vback", 8],
         ["FollowDist", 200], ["Kd", 0.08], ["Ka", 0.5], ["FollowVmax", 14], ["FollowWmax", 8], ["FlipRows", 0], ["FlipCols", 0],
         ["WpVel", 10], ["WpLookahead", 20], ["WpTurnAngle", 60], ["WpTol", 5], ["WpStopDist", 150],
-        ["PoseSource", 1], ["MagGain", 0], ["NavVariant", 1], ["GyroZupt", 0], ["GyroScale", 1]];
+        ["PoseSource", 1], ["MagGain", 0],
+        ["LfVel", 8], ["LfLookahead", 35], ["LfCamHeight", 7], ["LfCamTilt", 0], ["LfFocal", 208], ["LfContrast", 25], ["NavVariant", 1], ["GyroZupt", 0], ["GyroScale", 1]];
       this.wpMinRadius = 12;      // RK.WpMinRadius (not tunable)
       this.rays = []; this.biasEst = 0;   // gyro offset learned by the fusion (kept when the robot is put back)
       this.configure(sim.settings(), true);
     }
     configure(s, newRoom) {
       this.cfg = s;
-      if (newRoom) { const r = simRoom(s.room); this.walls = r.walls || null; this.world = r.world || null; this.resetPose(); }
+      if (newRoom) { const r = simRoom(s.room); this.walls = r.walls || null; this.world = r.world || null; this.tape = r.tape || null; this.resetPose(); }
     }
     // robot at the start pose of the tab "Simulation"; the odometry starts there with (0, 0, 0)
     resetPose() {
@@ -315,6 +340,8 @@
         l = v + w; r = v - w;
       } else if (this.mode === 2) {
         [l, r] = this.autopilot(front, scan);
+      } else if (this.mode === 5) {
+        [l, r] = this.lineFollow(front, dt);
       } else if (this.mode === 4) {
         if (this.wpState === 0 && this.wp.length) this.startPath();
         if (this.wpState === 1 || this.wpState === 3) {
@@ -338,6 +365,7 @@
       }
       if (this.mode !== 4) this.wpState = 0;
       if (this.mode !== 2) this.nav = 0;
+      if (this.mode !== 5) { this.lineState = 0; this.lineLost = 0; this.linePts = []; }
       this.cmdL = l; this.cmdR = r;
       const k = dt / 0.1;   // wheel speed control (PT1, 0.1 s)
       p.vl += k * (l - p.vl); p.vr += k * (r - p.vr);
@@ -410,6 +438,44 @@
       const kMax = 1 / this.wpMinRadius;
       return { alpha, kappa: Math.max(-kMax, Math.min(kMax, 2 * Math.sin(alpha) / L)) };
     }
+    // camera model of rk_line_detect: per scan row the floor distance x, there the tape crossing nearest to the centre
+    lineDetect() {
+      const p = this.p, c = Math.cos(p.psi), s = Math.sin(p.psi), t = this.par("LfCamTilt") * Math.PI / 180, f = this.par("LfFocal"), h = this.par("LfCamHeight");
+      return LINE_ROWS.map((row) => {
+        const a = (row - 60.5) / f, down = a * Math.cos(t) + Math.sin(t), fwd = Math.cos(t) - a * Math.sin(t);
+        if (!this.tape || down <= 0.01) return null;
+        const k = h / down, x = k * fwd + LINE_CAM_X, ymax = k * 79.5 / f;
+        if (this.ray(p.x, p.y, p.psi) < x) return null;                    // wall in between
+        const ax = p.x + x * c - ymax * s, ay = p.y + x * s + ymax * c, bx = p.x + x * c + ymax * s, by = p.y + x * s - ymax * c;
+        let best = null;
+        for (let i = 1; i < this.tape.length; i++) {
+          const [qx, qy] = this.tape[i - 1], [rx, ry] = this.tape[i], d1x = bx - ax, d1y = by - ay, d2x = rx - qx, d2y = ry - qy;
+          const den = d1x * d2y - d1y * d2x;
+          if (Math.abs(den) < 1e-9) continue;
+          const u = ((qx - ax) * d2y - (qy - ay) * d2x) / den, w = ((qx - ax) * d1y - (qy - ay) * d1x) / den;
+          if (u >= 0 && u <= 1 && w >= 0 && w <= 1) { const y = ymax * (1 - 2 * u); if (best === null || Math.abs(y) < Math.abs(best)) best = y; }
+        }
+        return best === null ? null : [x, best + (Math.random() - 0.5) * 0.6];
+      });
+    }
+    // line following like rk_line_control: Pure Pursuit on the tape points; line lost: hold, search, stop
+    lineFollow(front, dt) {
+      if (!(this.t - this.lineT < 0.1)) { this.lineT = this.t; this.linePts = this.lineDetect(); }   // camera 10 Hz
+      if (front < 150) { this.lineState = 4; return [0, 0]; }                                         // RK.LfStopDist
+      const pts = this.linePts.filter(Boolean), L = this.par("LfLookahead");
+      if (pts.length) {
+        let q = pts[0];
+        for (const r of pts) if (Math.abs(Math.hypot(r[0], r[1]) - L) < Math.abs(Math.hypot(q[0], q[1]) - L)) q = r;
+        const kappa = Math.max(-1 / 12, Math.min(1 / 12, 2 * q[1] / (q[0] * q[0] + q[1] * q[1])));   // RK.LfMinRadius
+        const v = this.par("LfVel") * Math.max(0.4, 1 - 6 * Math.abs(kappa)), w = v * kappa * TRACK_CM / 2;
+        this.lineSide = q[1] >= 0 ? 1 : -1; this.lineLost = 0; this.lineLast = [v - w, v + w]; this.lineState = 1;
+        return this.lineLast;
+      }
+      this.lineLost = (this.lineLost || 0) + dt;
+      if (this.lineLost < 0.5) { this.lineState = 1; return this.lineLast || [0, 0]; }
+      if (this.lineLost < 6.5) { this.lineState = 2; const w = this.par("Wturn") * (this.lineSide || 1); return [-w, w]; }
+      this.lineState = 3; return [0, 0];
+    }
     sendState(front) {
       const o = this.odom(), b = new DataView(new ArrayBuffer(20));
       b.setUint8(0, PKT.STATE); b.setUint16(1, Math.round(this.t * 100) & 0xffff, true);
@@ -426,14 +492,37 @@
       h.setInt16(5, Math.round((deg(this.p.psi) + (Math.random() - 0.5) * 6) * 10), true); h.setInt16(7, Math.round(this.yawRate * 10), true);
       h.setUint8(9, 1 | (this.cfg.heading !== "enc" ? 2 : 0));
       this.emit(h);
+      if (this.mode === 5) {          // line state and tape points (robot frame, cm) as the firmware
+        const q = new DataView(new ArrayBuffer(15));
+        let mask = 0;
+        q.setUint8(0, PKT.LINE); q.setUint8(1, this.lineState || 0);
+        (this.linePts || []).forEach((pt, k) => {
+          if (!pt || k >= 6) return;
+          mask |= 1 << k; q.setUint8(3 + 2 * k, Math.max(0, Math.min(255, Math.round(pt[0])))); q.setInt8(4 + 2 * k, Math.max(-128, Math.min(127, Math.round(pt[1]))));
+        });
+        q.setUint8(2, mask); this.emit(q);
+      }
     }
-    // simulated camera (60 deg, 8 cm above the floor): walls 40 cm high, darker with distance, light floor
+  // simulated camera with the pinhole model of the line following (RK.LfCamHeight, LfCamTilt, LfFocal):
+    // light floor with the tape, walls 40 cm high (darker with distance), dark above
     sendCamera() {
-      const p = this.p, fov = 60 * Math.PI / 180, f = CAM_W / 2 / Math.tan(fov / 2), hor = CAM_H / 2, img = new Uint8Array(CAM_W * CAM_H);
+      const p = this.p, f = this.par("LfFocal") / 2, h = this.par("LfCamHeight"), t = this.par("LfCamTilt") * Math.PI / 180;
+      const cx = (CAM_W + 1) / 2, cy = (CAM_H + 1) / 2, cs = Math.cos(p.psi), sn = Math.sin(p.psi), img = new Uint8Array(CAM_W * CAM_H);
       for (let c = 0; c < CAM_W; c++) {
-        const da = fov / 2 - (c + 0.5) / CAM_W * fov, d = Math.max(5, this.ray(p.x, p.y, p.psi + da) * Math.cos(da));
-        const base = hor + f * 8 / d, top = hor - f * 32 / d, wall = Math.max(3, Math.min(13, 13 - d / 35));
-        for (let r = 0; r < CAM_H; r++) img[r * CAM_W + c] = r >= base ? Math.min(15, 8 + 7 * (r - hor) / hor) : r >= top ? wall : 2;
+        const lat = -(c + 1 - cx) / f, wd = this.ray(p.x + LINE_CAM_X * cs, p.y + LINE_CAM_X * sn, p.psi + Math.atan(lat));
+        for (let r = 0; r < CAM_H; r++) {
+          const a = (r + 1 - cy) / f, down = a * Math.cos(t) + Math.sin(t), fwd = Math.cos(t) - a * Math.sin(t), horiz = Math.hypot(fwd, lat);
+          const dFloor = down > 0.001 ? h / down * horiz : Infinity;            // horizontal distance to the floor point
+          let v;
+          if (dFloor < wd) {
+            const k = h / down, x = k * fwd + LINE_CAM_X, y = k * lat, gx = p.x + x * cs - y * sn, gy = p.y + x * sn + y * cs;
+            v = this.tape && distToTape(gx, gy, this.tape) < LINE_TAPE_CM / 2 ? 2 : Math.min(15, 10 + 4 * Math.min(1, 30 / dFloor));
+          } else {
+            const z = h - down / horiz * wd;                                     // height where the ray meets the wall
+            v = z >= 0 && z <= 40 ? Math.max(3, Math.min(12, 12 - wd / 35)) : 2;
+          }
+          img[r * CAM_W + c] = Math.round(v);
+        }
       }
       this.cam = (this.cam + 1) & 0xff || 1;
       for (let k = 0; k < CAM_PARTS; k++) {
@@ -484,6 +573,7 @@
     else if (type === PKT.PARAM && dv.byteLength >= 8) onParam(dv);
     else if (type === PKT.HEADING && dv.byteLength >= 10) onHeading(dv);
     else if (type === PKT.CAMERA && dv.byteLength >= 20) camera.part(dv);
+    else if (type === PKT.LINE && dv.byteLength >= 15) onLine(dv);
     else if (type === PKT.WP_ACK && dv.byteLength >= 2) {
       $("wpInfo").textContent = `Übertragen: ${dv.getUint8(1)} Wegpunkte ✓`;
       mission.acked = true;
@@ -532,6 +622,25 @@
     S.yawRate = dv.getInt16(7, true) / 10; S.imuFlags = dv.getUint8(9); S.hasHeading = true;
     charts.heading.push(S.t, [S.th, S.thEnc, S.thMag]);
   }
+
+  // line following: state and tape points of the camera (robot frame, cm); the points are entered
+  // into the map at the current pose (map frame, 2 cm cells, only with "Kartierung")
+  const tape = { pts: [], keys: new Set(), live: [] };
+  function onLine(dv) {
+    S.lineState = dv.getUint8(1);
+    const mask = dv.getUint8(2), m = loc.toMap(S.x, S.y, S.th), psi = -m.th * Math.PI / 180, c = Math.cos(psi), s = Math.sin(psi);
+    tape.live = [];
+    for (let k = 0; k < 6; k++) {
+      if (!(mask & (1 << k))) continue;
+      const x = dv.getUint8(3 + 2 * k), y = dv.getInt8(4 + 2 * k), gx = m.x + x * c - y * s, gy = m.y + x * s + y * c;
+      const key = `${Math.round(gx / 2)},${Math.round(gy / 2)}`;
+      tape.live.push([gx, gy]);
+      if ($("mapping").checked && !tape.keys.has(key)) { tape.keys.add(key); tape.pts.push([gx, gy]); }
+    }
+    if (tape.pts.length > 30000) { tape.pts.splice(0, 5000); tape.keys = new Set(tape.pts.map(([x, y]) => `${Math.round(x / 2)},${Math.round(y / 2)}`)); }
+    ui.mapDirty = true;
+  }
+  function clearTape() { tape.pts = []; tape.keys.clear(); tape.live = []; }
 
   function onTofPart(dv) {
     const frame = dv.getUint8(1), part = dv.getUint8(2);
@@ -912,6 +1021,7 @@
         t.pts.forEach(([x, y], i) => { const [sx, sy] = this.w2s(x, y); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); });
         g.stroke(); g.setLineDash([]); g.lineCap = "butt";
       }
+      if (layers.tape) this.drawTape(g, layers.tape);     // above the path: the robot drives on the tape
       if (layers.start) this.startMarker(g, layers.start);
       if (layers.waypoints && layers.waypoints.list.length) this.drawWaypoints(g, layers.waypoints, layers.robots && layers.robots[layers.robots.length - 1]);
       for (const r of layers.robots || []) this.robot(g, r);
@@ -926,6 +1036,7 @@
       if (layers.trails) out.trails = layers.trails.map((t) => ({ ...t, pts: t.pts.map(([x, y]) => P(x, y)) }));
       if (layers.waypoints) out.waypoints = { ...layers.waypoints, list: layers.waypoints.list.map((p) => { const [x, y] = P(p.x, p.y); return { ...p, x, y }; }) };
       if (layers.robots) out.robots = layers.robots.map((r) => { const [x, y] = P(r.x, r.y); return { ...r, x, y, th: r.th - deg }; });
+      if (layers.tape) out.tape = { ...layers.tape, pts: (layers.tape.pts || []).map(([x, y]) => P(x, y)), live: (layers.tape.live || []).map(([x, y]) => P(x, y)) };
       if (layers.start) { const [x, y] = P(layers.start.x, layers.start.y); out.start = { x, y, psi: layers.start.psi + f.psi }; }
       return out;
     }
@@ -961,6 +1072,19 @@
       g.textAlign = "right"; g.textBaseline = "bottom"; g.fillText("x [m]", W - 2, H - 1);
       g.save(); g.translate(11, 4); g.rotate(-Math.PI / 2); g.textAlign = "right"; g.textBaseline = "middle"; g.fillText("y [m]", 0, 0); g.restore();
       g.textAlign = "start"; g.textBaseline = "alphabetic";
+    }
+    // tape of the line following: course (simulation), points found by the camera, current points
+    drawTape(g, { line = null, pts = [], live = [] }) {
+      if (line && line.length > 1) {
+        g.strokeStyle = css("--map-occ"); g.lineWidth = Math.max(2, LINE_TAPE_CM * this.scale); g.lineJoin = "round"; g.beginPath();
+        line.forEach(([x, y], i) => { const [sx, sy] = this.w2s(x, y); i ? g.lineTo(sx, sy) : g.moveTo(sx, sy); });
+        g.stroke();
+      }
+      const r = Math.max(1.5, this.scale);
+      g.fillStyle = css("--s2");
+      for (const [x, y] of pts) { const [sx, sy] = this.w2s(x, y); g.fillRect(sx - r, sy - r, 2 * r, 2 * r); }
+      g.strokeStyle = css("--s2"); g.lineWidth = 2;
+      for (const [x, y] of live) { const [sx, sy] = this.w2s(x, y); g.beginPath(); g.arc(sx, sy, 5, 0, 2 * Math.PI); g.stroke(); }
     }
     // two-wheel robot (differential drive) as in MobileRobotSim, at least 9 px radius
     robot(g, r) {
@@ -1037,6 +1161,7 @@
       grid: map,
       trails: [{ pts: S.trail, color: "--map-trail" }],
       waypoints: { list: wps, cur: curWp() },
+      tape: { pts: tape.pts, live: S.mode === 5 ? tape.live : [] },
       robots: [{ ...rp, color: "--robot" }],
     });
   }
@@ -1067,6 +1192,7 @@
   function missionText() {
     if (!S.connected) return ["nicht verbunden", ""];
     if (mission.paused) return [`Pause – ${wps.filter((p) => !p.reached).length} Wegpunkte offen`, "warn"];
+    if (S.mode === 5) return [`Linienfolge: ${LINE_NAMES[S.lineState ?? 0]}`, S.lineState === 1 ? "ok" : S.lineState >= 2 ? "warn" : ""];
     if (S.mode !== 4) return [`Modus: ${MODE_NAMES[S.mode] ?? S.mode}`, ""];
     const n = wps.length, cur = curWp();
     if (S.wpState === 3) return [`Blockiert: Hindernis ${Math.round(S.front / 10)} cm vor dem Roboter (Ziel ${cur + 1} von ${n})`, "warn"];
@@ -1516,6 +1642,7 @@
       : (S.imuFlags & 2) ? `Gyroskop (Drehrate ${S.yawRate.toFixed(1)} °/s)` : (S.imuFlags & 1) ? "Encoder (Gyro aus: RK.PoseSource = 0)" : "Encoder (keine IMU-Daten)";
     const f = []; if (S.flags & 1) f.push("Klippe"); if (S.flags & 2) f.push("Ziel erkannt"); if (S.mode === 4 && S.wpState === 3) f.push("Hindernis");
     $("stFlags").textContent = f.length ? f.join(", ") : "–";
+    $("stLine").textContent = S.mode === 5 ? (LINE_NAMES[S.lineState ?? 0] ?? S.lineState) : "–";
     if (REC.on) recUi();
   }
   let lastWpRender = "";
@@ -1649,7 +1776,7 @@
     restartOdom() {
       this.link.write(cmd.odomReset());
       S.lastOdom = null; S.measL = S.measR = 0;
-      map.clear(); loc.reset(); S.trail = []; ui.mapDirty = true;
+      map.clear(); loc.reset(); clearTape(); S.trail = []; ui.mapDirty = true;
     },
     clearTrails() { this.trueTrail = []; this.estTrail = []; this.corTrail = []; this.dirty = true; },
     sample(l) {       // every 100 ms from the simulation
@@ -1664,7 +1791,7 @@
       const st = $("simStatus");
       const room = simRoom($("simRoom").value), start = this.startPose();
       if (!l) {
-        this.view.draw({ walls: room.walls, world: room.world, start,
+        this.view.draw({ walls: room.walls, world: room.world, start, tape: room.tape ? { line: room.tape } : null,
           robots: [{ x: start.x, y: start.y, th: -start.psi * 180 / Math.PI, color: "--true-robot", alpha: 0.5 }] });
         this.estView.draw({ frame: start, grid: map, start: { x: 0, y: 0, psi: 0 } });
         st.textContent = this.picking ? "Startpose: in die linke Karte klicken (Ziehen = Richtung)" : "Simulation aus – „▶ Simulation starten“";
@@ -1675,11 +1802,12 @@
         frame: this.frame(), grid: map, trails: [{ pts: S.trail, color: "--map-trail" }],
         waypoints: { list: wps, cur: curWp() },
         start: { x: 0, y: 0, psi: 0 },
+        tape: { pts: tape.pts, live: S.mode === 5 ? tape.live : [] },
         robots: [{ ...loc.toMap(S.x, S.y, S.th), color: "--robot" }],
       });
       const fov = { x: l.p.x + TOF_OFFSET_CM * Math.cos(l.p.psi), y: l.p.y + TOF_OFFSET_CM * Math.sin(l.p.psi), psi: l.p.psi, range: Number($("mapRange").value) };
       this.view.draw({
-        walls: l.walls, world: l.world, fov, rays: l.rays, start: l.origin || start,
+        walls: l.walls, world: l.world, fov, rays: l.rays, start: l.origin || start, tape: l.tape ? { line: l.tape } : null,
         waypoints: { list: wps.map((p) => ({ ...this.odo2world(p.x, p.y), reached: p.reached })), cur: curWp() },
         trails: [{ pts: this.estTrail, color: "--map-trail" }, ...(loc.active ? [{ pts: this.corTrail, color: "--s3" }] : []),
                  { pts: this.trueTrail, color: "--true-trail", dash: [6, 4] }],
@@ -1820,6 +1948,7 @@
     if (edge(2)) setMode(2);                                               // square
     if (edge(3)) setMode(4);                                               // triangle
     if (edge(9) && (mission.active || mission.paused)) pauseOrResume();    // options
+    if (edge(5)) setMode(5);                                               // R1
     if (edge(4)) toggleRec();                                              // L1
     pad.prev = gp.buttons.map((b) => b.pressed);
   }
@@ -2003,7 +2132,7 @@
   $("wpSend").onclick = () => sendWaypoints();
   $("wpPause").onclick = pauseOrResume;
   $("wpClear").onclick = () => { wps.length = 0; mission.active = false; mission.paused = false; renderWps(); };
-  $("mapClear").onclick = () => { map.clear(); loc.clearMap(); S.trail = []; ui.mapDirty = true; };
+  $("mapClear").onclick = () => { map.clear(); loc.clearMap(); clearTape(); S.trail = []; ui.mapDirty = true; };
   // path only: the map stays (in the tab "Simulation" also the true and estimated path)
   $("trailClear").onclick = () => { S.trail = []; sim.clearTrails(); ui.mapDirty = true; };
   // localization: stage 1 on the robot (parameter GyroZupt), stages 2 and 3 in the app
@@ -2019,7 +2148,7 @@
   $("odomReset").onclick = () => {
     if (!S.link) return toast("Nicht verbunden");
     if (!confirm("Odometrie auf (0, 0, 0) setzen? Karte, Spur und Wegpunkte beziehen sich danach auf die neue Lage und werden gelöscht.")) return;
-    S.link.write(cmd.odomReset()); map.clear(); loc.reset(); S.trail = []; wps.length = 0; mission.active = false; mission.paused = false;
+    S.link.write(cmd.odomReset()); map.clear(); loc.reset(); clearTape(); S.trail = []; wps.length = 0; mission.active = false; mission.paused = false;
     renderWps(); charts.clear(); S.lastOdom = null;
   };
   $("mapPng").onclick = () => mapCanvas.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `robkit_karte_${stamp()}.png`; a.click(); });
@@ -2043,7 +2172,7 @@
   $("simPickStart").onclick = () => { sim.setPicking(!sim.picking); sim.dirty = true; };
   $("simDefStart").onclick = () => { sim.showStart(simRoom($("simRoom").value).start); sim.applyStart(); };
   ["simStartX", "simStartY", "simStartTh"].forEach((id) => ($(id).onchange = () => sim.applyStart()));
-  $("mapSize").onchange = () => { map.clear(); loc.clearMap(); S.trail = []; ui.mapDirty = true; sim.dirty = true; toast(`Kartengröße ${$("mapSize").selectedOptions[0].text}, Karte gelöscht`); };
+  $("mapSize").onchange = () => { map.clear(); loc.clearMap(); clearTape(); S.trail = []; ui.mapDirty = true; sim.dirty = true; toast(`Kartengröße ${$("mapSize").selectedOptions[0].text}, Karte gelöscht`); };
   $("tpWin").onchange = () => { traj.last = 0; };
   $("simReset").onclick = () => sim.resetPose();
   $("simZoomIn").onclick = () => sim.zoom(1.3);

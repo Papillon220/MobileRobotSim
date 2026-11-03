@@ -726,6 +726,7 @@ ReachedGoal
               </div>
               <div class="legend">
                 <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn (Odometrie)</span>
+                <span><i class="sw box" style="--c:var(--s2)"></i>Linie (Kamera)</span>
                 <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
                 <span><i class="sw box" style="--c:var(--map-occ)"></i>belegt</span>
                 <span><i class="sw box" style="--c:var(--map-free)"></i>frei</span>
@@ -759,6 +760,7 @@ ReachedGoal
                 <div class="stats">
                   <div class="stat"><span class="k">Modus</span><span class="v" id="rkStMode">–</span></div>
                   <div class="stat"><span class="k">Autopilot</span><span class="v" id="rkStNav">–</span></div>
+                  <div class="stat"><span class="k">Linienfolge</span><span class="v" id="rkStLine">–</span></div>
                   <div class="stat"><span class="k">Wegpunkte</span><span class="v" id="rkStWp">–</span></div>
                   <div class="stat"><span class="k">Abstand vorne</span><span class="v" id="rkStFront">–</span></div>
                   <div class="stat"><span class="k">Position</span><span class="v" id="rkStPose">–</span></div>
@@ -842,6 +844,7 @@ ReachedGoal
             <button class="btn" data-mode="2">Autopilot</button>
             <button class="btn" data-mode="3">Follow me</button>
             <button class="btn" data-mode="4">Wegpunkte</button>
+            <button class="btn" data-mode="5" title="Schwarzes Klebeband auf hellem Boden mit der Kamera verfolgen">Linienfolge</button>
           </div>
           <div class="rk-navvar" title="Standard: dreht vor Hindernissen zur freieren Seite, bis der Weg frei ist. Random Turn: dreht um einen Zufallswinkel (45–180°) und fährt weiter.">
             <span class="hint">Autopilot</span>
@@ -850,7 +853,7 @@ ReachedGoal
           <button class="btn danger" id="rkStopBtn">STOPP</button>
           <details class="fold" id="rkPadInfo"><summary>Tastatur &amp; Gamepad (<span id="rkPadState">nicht verbunden</span>)</summary>
             <p class="hint">Leertaste = Stopp. Fernsteuerung mit Pfeiltasten oder W/A/S/D, durch Ziehen auf dem Roboterbild (nach oben = vorwärts, zur Seite = lenken) oder mit dem Gamepad.</p>
-            <p class="hint">Gamepad (PS4): Koppeln per USB oder Bluetooth, dann eine Taste drücken. Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller · ✕ Stopp · ○ Fernsteuerung · □ Autopilot · △ Wegpunkte · Options = Pause/Weiter · L1 = Aufnahme</p>
+            <p class="hint">Gamepad (PS4): Koppeln per USB oder Bluetooth, dann eine Taste drücken. Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller · ✕ Stopp · ○ Fernsteuerung · □ Autopilot · △ Wegpunkte · Options = Pause/Weiter · L1 = Aufnahme · R1 = Linienfolge</p>
           </details>
           <p class="hint" id="rkJoyInfo" hidden></p>
         </div>
@@ -909,6 +912,8 @@ ReachedGoal
                 <span><i class="sw line dashed" style="--c:var(--true-trail)"></i>Wahre Bahn</span>
                 <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn</span>
                 <span><i class="sw line" style="--c:var(--s3)"></i>Korrigiert (Lokalisierung)</span>
+                <span><i class="sw line" style="--c:var(--map-occ)"></i>Klebeband</span>
+                <span><i class="sw box" style="--c:var(--s2)"></i>Linie (Kamera)</span>
                 <span><i class="sw box" style="--c:var(--fov)"></i>ToF-Sichtfeld</span>
                 <span><i class="sw line thin" style="--c:var(--ray)"></i>ToF-Strahlen</span>
                 <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
@@ -929,6 +934,7 @@ ReachedGoal
                 <option value="octagon">Achteckiger Raum mit Säule</option>
                 <option value="corridor">Flur mit Abzweig</option>
                 <option value="parcours">Parcours</option>
+                <option value="line">Linienparcours (Klebeband) 5 × 3,6 m</option>
                 <option value="empty">Leerer Raum 4 × 3 m</option>
                 <option value="custom" disabled>Eigene Karte (geladen)</option>
               </select>

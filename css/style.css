@@ -376,6 +376,7 @@ pre.code { margin: 0; padding: 8px 10px; background: var(--panel-2); border: 1px
 /* Modus und Stopp */
 .rk-modes { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .rk-modes .btn { padding: 7px 6px; }
+.rk-modes .btn[data-mode="5"] { grid-column: 1 / -1; }
 .rk-modes .btn.sel { background: var(--accent); border-color: var(--accent); color: #fff; }
 .rk-modes .btn.sel:hover:not(:disabled) { background: var(--accent); filter: brightness(1.08); }
 .rk-modes .btn.pending { border: 2px dashed var(--accent); }
