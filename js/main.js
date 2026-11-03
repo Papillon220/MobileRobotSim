@@ -4,7 +4,7 @@
 (function () {
   'use strict';
   const MRS = window.MRS;
-  MRS.VERSION = 'V1.5'; // Programmversion (Kopfzeile und Demo-Anzeigen werden beim Start daraus gesetzt)
+  MRS.VERSION = 'V1.6'; // Programmversion (Kopfzeile und Demo-Anzeigen werden beim Start daraus gesetzt)
   const TABS = { plan: MRS.PlanningTab, teleop: MRS.TeleopTab, slam: MRS.SlamTab, follow: MRS.FollowTab, robkit: MRS.RobkitTab };
   let current = 'plan';
 

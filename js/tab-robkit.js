@@ -287,12 +287,18 @@
       return { sx, sy, d };
     }
     autopilot(front, scan) {
-      // forward, slower close to obstacles; turn on the spot to the freer side until the corridor is clear
+      // forward, slower close to obstacles. Standard (NavVariant 1): turn on the spot to the freer side until the
+      // corridor is clear. Random Turn (2): turn by a random angle (45 ... 180 deg, time controlled), then go on
       const stop = this.par("StopDist"), clear = this.par("ClearDist");
-      if (this.nav !== 2 && front < stop) {
-        this.nav = 2; this.turnDir = scan.d.slice(0, 4).reduce((a, b) => a + b) > scan.d.slice(4).reduce((a, b) => a + b) ? 1 : -1;
+      if (this.par("NavVariant") >= 1.5) {
+        if ((this.nav !== 2 && front < stop) || (this.nav === 2 && this.t >= this.turnEnd && front < stop)) this.randomTurn();
+        else if (this.nav === 2 && this.t >= this.turnEnd) this.nav = 1;
+      } else {
+        if (this.nav !== 2 && front < stop) {
+          this.nav = 2; this.turnDir = scan.d.slice(0, 4).reduce((a, b) => a + b) > scan.d.slice(4).reduce((a, b) => a + b) ? 1 : -1;
+        }
+        if (this.nav === 2 && front > clear) this.nav = 1;
       }
-      if (this.nav === 2 && front > clear) this.nav = 1;
       if (this.nav === 0) this.nav = 1;
       if (this.nav === 2) { const w = this.par("Wturn"); return [-w * this.turnDir, w * this.turnDir]; }
       const v = Math.min(this.par("Vmax"), Math.max(this.par("Vmin"), this.par("Vmin") + this.par("Kv") * (front - stop)));
@@ -361,6 +367,11 @@
       const now = this.t * 1000;
       if (now - this.lastState >= 100) { this.lastState = now; this.sendState(front); sim.sample(this); }
       if (this.tofHz > 0 && now - this.lastTof >= 1000 / this.tofHz) { this.lastTof = now; this.sendTof(scan); }
+    }
+    randomTurn() {
+      const a = (45 + Math.random() * 135) * Math.PI / 180;     // RK.RandTurnMin ... RK.RandTurnMax
+      this.nav = 2; this.turnDir = Math.random() < 0.5 ? 1 : -1;
+      this.turnEnd = this.t + a * TRACK_CM / (2 * this.par("Wturn"));
     }
     startPath() {
       const o = this.odom();
@@ -1345,20 +1356,20 @@
   // ============================================================================
   const joy = { speed: 0, steer: 0, active: false, sent: [0, 0], keys: new Set(), lastSend: 0 };
   (function joystick() {
-    const pad = $("joy"), knob = $("knob");
-    const setKnob = (nx, ny) => { knob.style.left = `${33 + nx * 33}%`; knob.style.top = `${33 + ny * 33}%`; };
+    // the robot picture is the touch area: dragging from its centre = speed (up) and steering (sideways)
+    const pad = $("joy");
     const move = (e) => {
       const r = pad.getBoundingClientRect();
       let nx = (e.clientX - r.left - r.width / 2) / (r.width / 2), ny = (e.clientY - r.top - r.height / 2) / (r.height / 2);
       const m = Math.hypot(nx, ny); if (m > 1) { nx /= m; ny /= m; }
-      setKnob(nx, ny); joy.speed = Math.round(-ny * 100); joy.steer = Math.round(nx * 100);
+      joy.speed = Math.round(-ny * 100); joy.steer = Math.round(nx * 100);
     };
     pad.addEventListener("pointerdown", (e) => {
       if (S.mode !== 1) { toast("Joystick nur im Modus Fernsteuerung"); return; }
-      pad.setPointerCapture(e.pointerId); joy.active = true; move(e);
+      e.preventDefault(); pad.setPointerCapture(e.pointerId); joy.active = true; pad.classList.add("driving"); move(e);
     });
     pad.addEventListener("pointermove", (e) => { if (joy.active) move(e); });
-    const end = () => { joy.active = false; joy.speed = 0; joy.steer = 0; setKnob(0, 0); };
+    const end = () => { joy.active = false; joy.speed = 0; joy.steer = 0; pad.classList.remove("driving"); };
     pad.addEventListener("pointerup", end); pad.addEventListener("pointercancel", end);
     const keyMap = { ArrowUp: "f", KeyW: "f", ArrowDown: "b", KeyS: "b", ArrowLeft: "l", KeyA: "l", ArrowRight: "r", KeyD: "r" };
     // only text fields keep the keys (checkboxes and buttons keep the focus after a click)
@@ -1430,7 +1441,7 @@
     });
     $("joy").classList.toggle("disabled", S.mode !== 1);
     $("joyInfo").textContent = S.mode === 1 ? `Geschwindigkeit ${joy.sent[0]} %, Lenkung ${joy.sent[1]} %` : "Nur im Modus Fernsteuerung aktiv";
-    locUi();
+    locUi(); navVariantUi();
     if (!S.connected) return;
     $("stMode").textContent = MODE_NAMES[S.mode] ?? S.mode;
     $("stNav").textContent = S.mode === 2 ? (NAV_NAMES[S.nav] ?? S.nav) : "–";
@@ -1906,6 +1917,18 @@
   $("connectBtn").onclick = () => connect(false);
   $("demoBtn").onclick = () => connect(true);
   document.querySelectorAll("#rkModeBtns button").forEach((b) => (b.onclick = () => setMode(Number(b.dataset.mode))));
+  // autopilot variant: parameter NavVariant of the robot (1 Standard, 2 Random Turn), also while driving
+  const navVariantParam = () => S.params.find((q) => q && q.name === "NavVariant");
+  function navVariantUi() {
+    const p = navVariantParam();
+    document.querySelectorAll("#rkNavVariant button").forEach((b) => {
+      b.classList.toggle("on", !!p && Math.round(p.value) === Number(b.dataset.v)); b.disabled = !S.link || !p;
+    });
+  }
+  document.querySelectorAll("#rkNavVariant button").forEach((b) => (b.onclick = () => {
+    const p = navVariantParam();
+    if (S.link && p) S.link.write(cmd.paramSet(p.id, Number(b.dataset.v)));
+  }));
   $("stopBtn").onclick = stop;
   $("tofRate").onchange = () => S.link && S.link.write(cmd.stream(Number($("tofRate").value)));
   $("zoomIn").onclick = () => { view.zoom(1.3); ui.mapDirty = true; };

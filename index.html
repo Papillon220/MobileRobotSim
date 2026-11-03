@@ -830,6 +830,10 @@ ReachedGoal
             <button class="btn" data-mode="3">Follow me</button>
             <button class="btn" data-mode="4">Wegpunkte</button>
           </div>
+          <div class="rk-navvar" title="Standard: dreht vor Hindernissen zur freieren Seite, bis der Weg frei ist. Random Turn: dreht um einen Zufallswinkel (45–180°) und fährt weiter.">
+            <span class="hint">Autopilot</span>
+            <div class="seg" id="rkNavVariant"><button data-v="1" disabled>Standard</button><button data-v="2" disabled>Random Turn</button></div>
+          </div>
           <button class="btn danger" id="rkStopBtn">STOPP</button>
           <p class="hint">Leertaste = Stopp. Fernsteuerung am PC auch mit Pfeiltasten oder W/A/S/D.</p>
         </div>
@@ -845,9 +849,10 @@ ReachedGoal
           <p class="hint" id="rkWpInfo">Koordinaten im Odometrie-System: Start = (0, 0), x nach vorn, y nach links. Erreichte Punkte werden grau.</p>
         </div>
         <div class="card c-joy">
-          <h3>Joystick</h3>
-          <div class="rk-joy disabled" id="rkJoy"><div class="rk-knob" id="rkKnob"></div></div>
+          <h3>Roboter</h3>
+          <img class="rk-robot disabled" id="rkJoy" src="img/robkit1.jpg" alt="Roboter ROBKIT1" draggable="false">
           <p class="hint rk-center" id="rkJoyInfo">Nur im Modus Fernsteuerung aktiv</p>
+          <p class="hint rk-center">Im Modus Fernsteuerung auf dem Bild ziehen: nach oben = vorwärts, zur Seite = lenken.</p>
           <div class="rk-pad" id="rkPadInfo">
             <b>Gamepad (PS4):</b> <span id="rkPadState">nicht verbunden – per USB oder Bluetooth koppeln und eine Taste drücken</span>
             <p class="hint">Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller ·

@@ -391,15 +391,13 @@ pre.code { margin: 0; padding: 8px 10px; background: var(--panel-2); border: 1px
 .rk-wplist button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 14px; padding: 0 6px; }
 .rk-wplist button:hover { color: var(--bad); }
 /* Joystick und Gamepad */
-.rk-joy {
-  align-self: center; width: min(180px, 60vw); aspect-ratio: 1; border-radius: 50%; background: var(--panel-2);
-  border: 2px solid var(--line-2); position: relative; touch-action: none; user-select: none; -webkit-user-select: none;
-}
-.rk-joy::before, .rk-joy::after { content: ""; position: absolute; background: var(--line); }
-.rk-joy::before { left: 50%; top: 10%; bottom: 10%; width: 1px; }
-.rk-joy::after { top: 50%; left: 10%; right: 10%; height: 1px; }
-.rk-joy.disabled { opacity: 0.45; }
-.rk-knob { position: absolute; z-index: 1; width: 34%; aspect-ratio: 1; left: 33%; top: 33%; border-radius: 50%; background: var(--accent); box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25); }
+/* Bild des Roboters, zugleich Touch-Fläche der Fernsteuerung */
+.rk-robot { display: block; align-self: center; width: min(240px, 70vw); height: auto; border-radius: 8px; touch-action: none; user-select: none; -webkit-user-drag: none; cursor: grab; }
+.rk-robot.disabled { cursor: default; }
+.rk-robot.driving { outline: 2px solid var(--accent); outline-offset: 3px; cursor: grabbing; }
+.rk-navvar { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 8px; }
+.rk-navvar .seg button.on { background: var(--accent-wash); color: var(--accent-ink); font-weight: 700; }
+.rk-navvar .seg button:disabled { opacity: 0.5; cursor: default; }
 .rk-center { text-align: center; }
 .rk-pad { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; }
 .rk-pad.on b { color: var(--go); }
