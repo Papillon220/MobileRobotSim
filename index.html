@@ -786,7 +786,8 @@ ReachedGoal
             <div class="card c-mapopt">
               <h3>Karte</h3>
               <div class="btn-row">
-                <button class="btn" id="rkMapClear">Karte löschen</button>
+                <button class="btn" id="rkMapClear" title="Belegungskarte und Bahn löschen">Karte löschen</button>
+                <button class="btn" id="rkTrailClear" title="Nur den bisherigen Verlauf löschen, die Karte bleibt">Bahn löschen</button>
                 <button class="btn" id="rkOdomReset">Odometrie auf 0</button>
               </div>
               <div class="btn-row">
@@ -801,9 +802,21 @@ ReachedGoal
                   <option value="80">80 cm</option><option value="120" selected>120 cm</option><option value="200">200 cm</option>
                 </select></label>
                 <label class="full">Kartengröße<select id="rkMapSize">
-                  <option value="240" selected>12 m × 12 m</option><option value="480">24 m × 24 m</option><option value="960">48 m × 48 m</option>
+                  <option value="240" selected>12 m × 12 m</option><option value="480">24 m × 24 m</option><option value="960">48 m × 48 m</option><option value="1600:10">160 m × 160 m (10-cm-Raster)</option>
                 </select></label>
               </div>
+            </div>
+            <div class="card c-loc">
+              <h3>Lokalisierung</h3>
+              <label class="chk" title="Firmware-Parameter GyroZupt"><input type="checkbox" id="rkLocZupt"> 1 · Gyro-Offset im Stillstand nachführen</label>
+              <label class="chk"><input type="checkbox" id="rkLocMatch"> 2 · Abgleich mit der Karte (Scan-Matching)</label>
+              <label class="chk"><input type="checkbox" id="rkLocRect"> 3 · Rechtwinklige Räume</label>
+              <div class="stats">
+                <div class="stat"><span class="k">Korrektur</span><span class="v" id="rkLocCorr">–</span></div>
+                <div class="stat"><span class="k">Abgleich</span><span class="v" id="rkLocStats">aus</span></div>
+                <div class="stat"><span class="k">Position (Karte)</span><span class="v" id="rkLocPose">–</span></div>
+              </div>
+              <p class="hint">Stufe 1 läuft auf dem Roboter (Parameter GyroZupt): Stehen die Räder, lernt er den Gyro-Offset nach. Stufe 2 sammelt einige ToF-Bilder und schiebt die Pose so, dass die Treffer auf den schon kartierten Wänden liegen. Stufe 3 hält die vorherrschende Wandrichtung bei Vielfachen von 90° (nur für rechtwinklige Räume). Wegpunkte liegen in der Karte und werden bei einer Korrektur neu übertragen.</p>
             </div>
           </aside>
         </div>
@@ -874,6 +887,7 @@ ReachedGoal
               <div class="legend">
                 <span><i class="sw line dashed" style="--c:var(--true-trail)"></i>Wahre Bahn</span>
                 <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn</span>
+                <span><i class="sw line" style="--c:var(--s3)"></i>Korrigiert (Lokalisierung)</span>
                 <span><i class="sw box" style="--c:var(--fov)"></i>ToF-Sichtfeld</span>
                 <span><i class="sw line thin" style="--c:var(--ray)"></i>ToF-Strahlen</span>
                 <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
@@ -939,6 +953,8 @@ ReachedGoal
                 <div class="stat"><span class="k">Position</span><span class="v" id="rkSimErrPos">–</span></div>
                 <div class="stat"><span class="k">Kurs</span><span class="v" id="rkSimErrTh">–</span></div>
                 <div class="stat"><span class="k">Gefahrene Strecke</span><span class="v" id="rkSimDist">–</span></div>
+                <div class="stat"><span class="k">Position mit Lokalisierung</span><span class="v" id="rkSimErrPosMap">–</span></div>
+                <div class="stat"><span class="k">Kurs mit Lokalisierung</span><span class="v" id="rkSimErrThMap">–</span></div>
               </div>
             </div>
           </aside>
@@ -967,7 +983,7 @@ ReachedGoal
               <h3>Aufzeichnung laden</h3>
               <input type="file" id="rkRpFile" accept=".json,.csv" multiple>
               <div class="btn-row"><button class="btn" id="rkRpUseCurrent" disabled>Aktuelle Aufnahme</button></div>
-              <p class="hint">Replay-Datei (.json) aus „Aufnahme“ oder die beiden CSV-Dateien (Zustand und ToF) zusammen auswählen. Die Karte wird beim Abspielen aus Pose und ToF-Bildern neu aufgebaut.</p>
+              <p class="hint">Replay-Datei (.json) aus „Aufnahme“ oder die beiden CSV-Dateien (Zustand und ToF) zusammen auswählen. Die Karte wird beim Abspielen aus Pose und ToF-Bildern neu aufgebaut. Die Optionen 2 und 3 der Lokalisierung (Steuerung) wirken auch hier; nach dem Umschalten von vorn abspielen.</p>
               <div class="stats">
                 <div class="stat"><span class="k">Dauer</span><span class="v" id="rkRpDur">–</span></div>
                 <div class="stat"><span class="k">Zustände / ToF-Bilder</span><span class="v" id="rkRpCount">–</span></div>

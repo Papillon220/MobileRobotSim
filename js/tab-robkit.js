@@ -179,7 +179,7 @@
   // description and default start pose (cm, rad counter-clockwise) per room
   const SIM_INFO = {
     lab: { desc: "Raum 3 m × 2 m mit drei Kisten." },
-    atrium: { desc: "Etage eines Hochschul- und Bürogebäudes, 107,8 m × 72,3 m: Hörsäle, Seminarräume und Büros um ein Atrium mit Wendeltreppe, Flure mit Stützen. Für die Karte des Roboters ist „Kartengröße 48 m“ sinnvoll.",
+    atrium: { desc: "Etage eines Hochschul- und Bürogebäudes, 107,8 m × 72,3 m: Hörsäle, Seminarräume und Büros um ein Atrium mit Wendeltreppe, Flure mit Stützen. Die Karte des Roboters wird dafür auf 160 m × 160 m (10-cm-Raster) gestellt, so ist das ganze Gebäude abfahrbar.",
       start: { x: 2805, y: 3775, psi: 27 * Math.PI / 180 } },
     flat: { desc: "Wohnung mit drei Zimmern, verbunden über Türen, mit Möbeln." },
     office: { desc: "Büro 6 m × 4 m mit Tischen und Schränken." },
@@ -207,7 +207,7 @@
         ["Kv", 0.02], ["Ksteer", 3], ["Wturn", 6], ["TurnTimeout", 4], ["CliffDist", 350], ["BackTime", 0.8], ["Vback", 8],
         ["FollowDist", 200], ["Kd", 0.08], ["Ka", 0.5], ["FollowVmax", 14], ["FollowWmax", 8], ["FlipRows", 0], ["FlipCols", 0],
         ["WpVel", 10], ["WpLookahead", 20], ["WpTurnAngle", 60], ["WpTol", 5], ["WpStopDist", 150],
-        ["PoseSource", 1], ["MagGain", 0], ["NavVariant", 1]];
+        ["PoseSource", 1], ["MagGain", 0], ["NavVariant", 1], ["GyroZupt", 0], ["GyroScale", 1]];
       this.wpMinRadius = 12;      // RK.WpMinRadius (not tunable)
       this.rays = []; this.biasEst = 0;   // gyro offset learned by the fusion (kept when the robot is put back)
       this.configure(sim.settings(), true);
@@ -347,13 +347,14 @@
       const el = p.vl * dt, er = p.vr * dt / (1 + this.cfg.scale);
       const ed = (el + er) / 2;
       this.psiEnc += (er - el) / TRACK_CM;
-      const gyro = w + this.cfg.gyroOffset * Math.PI / 180 + (Math.random() - 0.5) * 0.002;    // measured yaw rate with offset and noise
+      const gyro = (w + this.cfg.gyroOffset * Math.PI / 180 + (Math.random() - 0.5) * 0.002) * this.par("GyroScale");   // measured yaw rate: offset, noise, scale
       this.psiGyro += gyro * dt;
       // fusion: gyro heading, its offset is learned while the encoders report standstill (time constant 2 s) and subtracted
       if (Math.abs(el) + Math.abs(er) < 0.01 * dt) this.biasEst += (gyro - this.biasEst) * dt / 2;
       this.psiFus += (gyro - this.biasEst) * dt;
       this.yawRate = -gyro * 180 / Math.PI;
-      this.est.psi = { enc: this.psiEnc, gyro: this.psiGyro, fused: this.psiFus }[this.cfg.heading];
+      // parameter GyroZupt (stage 1 of the localization): the gyro heading learns its offset at standstill
+      this.est.psi = { enc: this.psiEnc, gyro: this.par("GyroZupt") >= 0.5 ? this.psiFus : this.psiGyro, fused: this.psiFus }[this.cfg.heading];
       this.est.x += ed * Math.cos(this.est.psi); this.est.y += ed * Math.sin(this.est.psi);
       this.cnt = (this.cnt + 1) & 0xff;
 
@@ -469,18 +470,20 @@
     S.front = dv.getUint16(16, true); S.vbat = dv.getUint8(18) / 20;
     const cnt = dv.getUint8(19);
     if (cnt !== S.cnt) {               // new odometry sample -> measured wheel speeds
-      const o = { t: S.t, x: S.x, y: S.y, th: S.th };
+      // heading change from the encoders: the pose heading (gyro) creeps in 0.1 deg steps while standing
+      const o = { t: S.t, x: S.x, y: S.y, th: S.th, thW: S.hasHeading ? S.thEnc : S.th };
       if (S.lastOdom && o.t > S.lastOdom.t) {
         const dt = o.t - S.lastOdom.t, psi = -S.lastOdom.th * Math.PI / 180;
         const v = ((o.x - S.lastOdom.x) * Math.cos(psi) + (o.y - S.lastOdom.y) * Math.sin(psi)) / dt;
-        const w = -wrap180(o.th - S.lastOdom.th) * Math.PI / 180 / dt;      // rad/s, counter-clockwise
+        const w = -wrap180(o.thW - S.lastOdom.thW) * Math.PI / 180 / dt;    // rad/s, counter-clockwise
         S.measL = 0.5 * S.measL + 0.5 * (v - w * TRACK_CM / 2);
         S.measR = 0.5 * S.measR + 0.5 * (v + w * TRACK_CM / 2);
       }
       S.lastOdom = o; S.cnt = cnt;
     }
     const last = S.trail[S.trail.length - 1];
-    if (!last || Math.hypot(last[0] - S.x, last[1] - S.y) > 0.5) { S.trail.push([S.x, S.y]); if (S.trail.length > 20000) S.trail.splice(0, 5000); }
+    const mp = loc.toMap(S.x, S.y, S.th);    // path in the map frame
+    if (!last || Math.hypot(last[0] - mp.x, last[1] - mp.y) > 0.5) { S.trail.push([mp.x, mp.y]); if (S.trail.length > 20000) S.trail.splice(0, 5000); }
     charts.push(S.t); traj.push();
     updateMission();
     if (REC.on) {
@@ -509,7 +512,7 @@
     for (let k = 0; k < 16; k++) f.z[part * 16 + k] = dv.getUint8(4 + k);
     if (f.n === 4) {
       S.tof = f.z; delete S.tofParts[frame];
-      if ($("mapping").checked) map.integrate(S.tof, S.x, S.y, S.th);
+      if ($("mapping").checked) loc.frame(S.tof, S.x, S.y, S.th);
       if (REC.on && $("recTof").checked) { REC.tof.push([+S.t.toFixed(2), +S.x.toFixed(1), +S.y.toFixed(1), +S.th.toFixed(1), ...S.tof]); recView.addTof(REC.tof[REC.tof.length - 1]); }
       ui.tofDirty = true; ui.mapDirty = true;
     }
@@ -523,45 +526,51 @@
     S.params[id] = { id, name, value: v };
     S.params.length = Math.max(S.params.length, n);
     params.render(id, isNew);
+    if (name === "GyroZupt") $("locZupt").checked = v >= 0.5;
   }
 
   // ============================================================================
-  // Occupancy grid (log odds), 5 cm cells, 12 m ... 48 m square around the origin
+  // Occupancy grid (log odds), square around the origin: 12 m ... 48 m with 5 cm cells, 160 m with 10 cm cells
   // ============================================================================
   class OccGrid {
-    // settings(): { rows: [ToF rows used], maxR: range limit in cm, size: cells per side }
+    // settings(): { rows: [ToF rows used], maxR: range limit in cm, size: cells per side, res: cell size in cm }
     constructor(settings) {
-      this.settings = settings; this.res = 5;
-      this.alloc(settings().size || 240);
+      this.settings = settings;
+      this.alloc(settings().size || 240, settings().res || 5);
     }
-    alloc(n) {
-      this.n = n; this.L = new Float32Array(n * n);
+    alloc(n, res = 5) {
+      this.n = n; this.res = res; this.L = new Float32Array(n * n);
       this.off = document.createElement("canvas"); this.off.width = this.off.height = n;
       this.img = this.off.getContext("2d").createImageData(n, n);
       this.invalidate();
     }
     // the image is repainted only where cells changed (box), completely after clear or a theme change
     invalidate() { this.full = true; this.box = null; this.dirty = true; }
-    clear() { const n = this.settings().size || 240; if (n !== this.n) this.alloc(n); else { this.L.fill(0); this.invalidate(); } }
+    clear() { const { size = 240, res = 5 } = this.settings(); if (size !== this.n || res !== this.res) this.alloc(size, res); else { this.L.fill(0); this.invalidate(); } }
     cell(x, y) { return [Math.floor(x / this.res) + this.n / 2, Math.floor(y / this.res) + this.n / 2]; }
     grow(i, j) {
       const b = this.box || (this.box = [i, j, i, j]);
       if (i < b[0]) b[0] = i; if (j < b[1]) b[1] = j; if (i > b[2]) b[2] = i; if (j > b[3]) b[3] = j;
     }
     add(i, j, d) { if (i < 0 || j < 0 || i >= this.n || j >= this.n) return; const k = j * this.n + i; this.L[k] = Math.max(-4, Math.min(4, this.L[k] + d)); }
-    // ToF image (row major, cm, 255 = invalid) at pose x, y (cm), theta (deg, + = right)
-    integrate(z, x, y, th) {
-      const { rows, maxR } = this.settings();
+    // rays of a ToF image (row major, cm, 255 = invalid) at pose x, y (cm), theta (deg, + = right):
+    // sensor position, end point (at most the range) and whether a wall was hit
+    rays(z, x, y, th) {
+      const { rows, maxR } = this.settings(), out = [];
       const psi = -th * Math.PI / 180, sx = x + TOF_OFFSET_CM * Math.cos(psi), sy = y + TOF_OFFSET_CM * Math.sin(psi);
       for (let c = 1; c <= 8; c++) {
         let d = 255;
         for (const r of rows) { const v = z[(r - 1) * 8 + (c - 1)]; if (v !== 255) d = Math.min(d, v); }
-        const hit = d < maxR, len = Math.min(d === 255 ? maxR : d, maxR);
-        const a = psi + (4.5 - c) * TOF_FOV_DEG / 8 * Math.PI / 180;
-        const ex = sx + len * Math.cos(a), ey = sy + len * Math.sin(a);
-        const [i0, j0] = this.cell(sx, sy), [i1, j1] = this.cell(ex, ey);
+        const len = Math.min(d === 255 ? maxR : d, maxR), a = psi + (4.5 - c) * TOF_FOV_DEG / 8 * Math.PI / 180;
+        out.push({ sx, sy, ex: sx + len * Math.cos(a), ey: sy + len * Math.sin(a), hit: d < maxR });
+      }
+      return out;
+    }
+    integrate(z, x, y, th) {
+      for (const r of this.rays(z, x, y, th)) {
+        const [i0, j0] = this.cell(r.sx, r.sy), [i1, j1] = this.cell(r.ex, r.ey);
         this.line(i0, j0, i1, j1, (i, j) => this.add(i, j, -0.35));
-        if (hit) this.add(i1, j1, 1.2);
+        if (r.hit) this.add(i1, j1, 1.2);
         this.grow(i0, j0); this.grow(i1, j1);
       }
       this.dirty = true;
@@ -606,8 +615,174 @@
       return lines.join("\n");
     }
   }
-  const mapSettings = () => ({ rows: $("mapRows").value.split(",").map(Number), maxR: Number($("mapRange").value), size: Number($("mapSize").value) });
+  // map size "cells" or "cells:cell size in cm"
+  const mapSettings = () => {
+    const [size, res = 5] = $("mapSize").value.split(":").map(Number);
+    return { rows: $("mapRows").value.split(",").map(Number), maxR: Number($("mapRange").value), size, res };
+  };
   const map = new OccGrid(mapSettings);
+
+  // ============================================================================
+  // Localization against the map (card "Lokalisierung", each stage optional):
+  //  1 gyro offset at standstill: on the robot (parameter GyroZupt)
+  //  2 scan matching: several ToF images are collected and fitted to the map
+  //  3 rectangular rooms: the dominant wall direction is kept at multiples of 90 deg
+  // corr maps the odometry frame of the robot into the map frame (= odometry
+  // frame at the last reset): p_map = R(corr.psi) p_odo + (corr.x, corr.y).
+  // The map, the path and the waypoints lie in the map frame.
+  // ============================================================================
+  const LOC = {
+    BATCH_MIN: 4, BATCH_MAX: 12, BATCH_MOVE_CM: 10, BATCH_TURN_DEG: 15,   // images per matching
+    SEARCH_CM: 15, SEARCH_DEG: 6, MIN_POINTS: 10, MIN_KNOWN: 0.35, MIN_GAIN: 1.08,
+  MATCH_GAIN: 0.5, MATCH_MAX_CM: 5, MATCH_MAX_DEG: 2,                    // damped: single wrong matches do little harm
+    RECT_GAIN: 0.3, RECT_MAX_DEG: 10, RECT_MIN_R: 0.5, RECT_WALLS: 40,
+  };
+  const wrap45 = (a) => ((a + Math.PI / 4) % (Math.PI / 2) + Math.PI / 2) % (Math.PI / 2) - Math.PI / 4;
+  class Localizer {
+    constructor(grid) { this.grid = grid; this.reset(); }
+    reset() { this.corr = { x: 0, y: 0, psi: 0 }; this.sentCorr = null; this.clearMap(); this.stats = { shift: 0, fit: 0, skip: 0 }; }
+    clearMap() { this.buf = []; this.walls = []; this.rect = null; }
+    get matching() { return $("locMatch").checked; }
+    get rectangular() { return $("locRect").checked; }
+    get active() { return this.matching || this.rectangular; }
+    // odometry pose (cm, deg + = right) -> map pose
+    toMap(x, y, th) {
+      const c = Math.cos(this.corr.psi), s = Math.sin(this.corr.psi);
+      return { x: c * x - s * y + this.corr.x, y: s * x + c * y + this.corr.y, th: wrap180(th - this.corr.psi * 180 / Math.PI) };
+    }
+    toOdo(x, y) {
+      const c = Math.cos(this.corr.psi), s = Math.sin(this.corr.psi), dx = x - this.corr.x, dy = y - this.corr.y;
+      return { x: c * dx + s * dy, y: -s * dx + c * dy };
+    }
+    // correction: rotate the map pose by dpsi about (px, py), then shift by (dx, dy)
+    shift(dx, dy, dpsi, px, py) {
+      const c = Math.cos(dpsi), s = Math.sin(dpsi), tx = this.corr.x - px, ty = this.corr.y - py;
+      this.corr = { x: c * tx - s * ty + px + dx, y: s * tx + c * ty + py + dy, psi: this.corr.psi + dpsi };
+      for (const w of this.walls) w[0] += dpsi;
+      if (this.onShift) this.onShift();
+    }
+    // new ToF image at the odometry pose
+    frame(z, x, y, th) {
+      if (!this.matching) {
+        this.flush();
+        if (this.rectangular) this.rectUpdate([{ z, x, y, th }]);
+        const m = this.toMap(x, y, th); this.grid.integrate(z, m.x, m.y, m.th);
+        return;
+      }
+      this.buf.push({ z, x, y, th });
+      const a = this.buf[0], n = this.buf.length;
+      const moved = Math.hypot(x - a.x, y - a.y), turned = Math.abs(wrap180(th - a.th));
+      if (n >= LOC.BATCH_MAX || (n >= LOC.BATCH_MIN && (moved >= LOC.BATCH_MOVE_CM || turned >= LOC.BATCH_TURN_DEG))) this.flush();
+    }
+    // collected images: correct the pose, then enter them into the map
+    flush() {
+      const fr = this.buf;
+      if (!fr.length) return;
+      this.buf = [];
+      if (this.rectangular) this.rectUpdate(fr);
+      if (this.matching) this.match(fr);
+      for (const f of fr) { const m = this.toMap(f.x, f.y, f.th); this.grid.integrate(f.z, m.x, m.y, m.th); }
+    }
+    // stage 2: search the shift (dx, dy, dpsi about the robot) that puts the hits onto the walls of the map
+    match(fr) {
+      const pts = [];
+      for (const f of fr) { const m = this.toMap(f.x, f.y, f.th); for (const r of this.grid.rays(f.z, m.x, m.y, m.th)) if (r.hit) pts.push([r.ex, r.ey]); }
+      const last = fr[fr.length - 1], pc = this.toMap(last.x, last.y, last.th);
+      if (pts.length < LOC.MIN_POINTS) { this.stats.skip++; return; }
+      const g = this.grid, n = g.n, L = g.L, res = g.res;
+      const idx = (x, y) => { const i = Math.floor(x / res) + n / 2, j = Math.floor(y / res) + n / 2; return i < 3 || j < 3 || i >= n - 3 || j >= n - 3 ? -1 : j * n + i; };
+      // cell value: occupancy or half of the best neighbour (wider capture range), known free space negative;
+      // interpolated between the cell centres, so that the score changes smoothly with the shift
+      const cellVal = (k) => { const v = Math.max(L[k], 0.5 * Math.max(L[k - 1], L[k + 1], L[k - n], L[k + n])); return v > 0 ? v : 0.5 * L[k]; };
+      const val = (x, y) => {
+        const fx = x / res + n / 2 - 0.5, fy = y / res + n / 2 - 0.5, i = Math.floor(fx), j = Math.floor(fy);
+        if (i < 3 || j < 3 || i >= n - 4 || j >= n - 4) return 0;
+        const ax = fx - i, ay = fy - j, k = j * n + i;
+        return (1 - ay) * ((1 - ax) * cellVal(k) + ax * cellVal(k + 1)) + ay * ((1 - ax) * cellVal(k + n) + ax * cellVal(k + n + 1));
+      };
+      // only where the map already has walls nearby (otherwise: new area, nothing to match)
+      let known = 0;
+      for (const [x, y] of pts) {
+        const k = idx(x, y); if (k < 0) continue;
+        search: for (let dj = -3; dj <= 3; dj++) for (let di = -3; di <= 3; di++) if (L[k + dj * n + di] > 1) { known++; break search; }
+      }
+      if (known < LOC.MIN_KNOWN * pts.length) { this.stats.skip++; return; }
+      const score = (dx, dy, dp) => {
+        const c = Math.cos(dp), s = Math.sin(dp); let sum = 0;
+        for (const [x, y] of pts) { const rx = x - pc.x, ry = y - pc.y; sum += val(c * rx - s * ry + pc.x + dx, s * rx + c * ry + pc.y + dy); }
+        // small preference for small corrections (corridors are ambiguous along the walls)
+        return sum - 0.02 * pts.length * ((dx * dx + dy * dy) / LOC.SEARCH_CM ** 2 + (dp * 180 / Math.PI / LOC.SEARCH_DEG) ** 2);
+      };
+      const s0 = score(0, 0, 0), rad = Math.PI / 180;
+      let best = [0, 0, 0, s0];
+      const grid = (cx, cy, cp, rc, sc, rp, sp) => {
+        for (let p = -rp; p <= rp + 1e-9; p += sp) for (let dx = -rc; dx <= rc + 1e-9; dx += sc) for (let dy = -rc; dy <= rc + 1e-9; dy += sc) {
+          const v = score(cx + dx, cy + dy, cp + p * rad);
+          if (v > best[3]) best = [cx + dx, cy + dy, cp + p * rad, v];
+        }
+      };
+      grid(0, 0, 0, LOC.SEARCH_CM, 3, LOC.SEARCH_DEG, 1.5);            // coarse
+      grid(best[0], best[1], best[2], 3, 1, 1.5, 0.5);                    // fine around the best
+      if (best[3] < s0 * LOC.MIN_GAIN + 0.05 * pts.length) { this.stats.fit++; return; }   // fits already (or no clear improvement)
+      this.stats.shift++;
+      const lim = (v, m) => Math.max(-m, Math.min(m, LOC.MATCH_GAIN * v));
+    this.shift(lim(best[0], LOC.MATCH_MAX_CM), lim(best[1], LOC.MATCH_MAX_CM), lim(best[2], LOC.MATCH_MAX_DEG * rad), pc.x, pc.y);
+    }
+    // stage 3: straight wall pieces (runs of neighbouring hits, line fit) -> dominant direction modulo 90 deg
+    rectUpdate(fr) {
+      let last = null;
+      for (const f of fr) {
+        const m = this.toMap(f.x, f.y, f.th), rs = this.grid.rays(f.z, m.x, m.y, m.th);
+        let run = [];
+        const fit = () => {
+          if (run.length >= 3) {
+            const k = run.length, mx = run.reduce((a, p) => a + p[0], 0) / k, my = run.reduce((a, p) => a + p[1], 0) / k;
+            let sxx = 0, syy = 0, sxy = 0;
+            for (const [x, y] of run) { sxx += (x - mx) ** 2; syy += (y - my) ** 2; sxy += (x - mx) * (y - my); }
+            sxx /= k; syy /= k; sxy /= k;
+            const minor = (sxx + syy) / 2 - Math.sqrt(((sxx - syy) / 2) ** 2 + sxy * sxy);
+            const span = Math.hypot(run[k - 1][0] - run[0][0], run[k - 1][1] - run[0][1]);
+            if (span >= 10 && Math.sqrt(Math.max(0, minor)) < 1.5) this.walls.push([0.5 * Math.atan2(2 * sxy, sxx - syy), span]);
+          }
+          run = [];
+        };
+        for (const r of rs) {
+          const q = run[run.length - 1];
+          if (r.hit && (!q || Math.hypot(r.ex - q[0], r.ey - q[1]) < 25)) run.push([r.ex, r.ey]);
+          else { fit(); if (r.hit) run.push([r.ex, r.ey]); }
+        }
+        fit();
+        last = m;
+      }
+      if (this.walls.length > LOC.RECT_WALLS) this.walls.splice(0, this.walls.length - LOC.RECT_WALLS);
+      if (this.walls.length < 8) return;
+      let C = 0, S = 0, W = 0;
+      for (const [a, w] of this.walls) { C += w * Math.cos(4 * a); S += w * Math.sin(4 * a); W += w; }
+      if (Math.hypot(C, S) / W < LOC.RECT_MIN_R) return;              // no clear direction (round or cluttered)
+      const dir = Math.atan2(S, C) / 4;
+      if (this.rect === null) { this.rect = dir; return; }             // reference: the first clear direction
+      const e = wrap45(dir - this.rect);
+      if (Math.abs(e) > LOC.RECT_MAX_DEG * Math.PI / 180) return;
+      this.shift(0, 0, -LOC.RECT_GAIN * e, last.x, last.y);
+    }
+    statsText() {
+      return `${this.stats.shift} korrigiert, ${this.stats.fit} passend, ${this.stats.skip} ohne Bezug` + (this.rect !== null ? `, Wandrichtung ${(this.rect * 180 / Math.PI).toFixed(1)}°` : "");
+    }
+  }
+  const loc = new Localizer(map);
+  // the waypoints lie in the map frame: after a correction the robot gets the open ones again in its odometry frame
+  loc.onShift = () => {
+    if (!S.link || !mission.active || mission.paused || !mission.acked || !loc.sentCorr || performance.now() - loc.sentAt < 3000) return;
+    const a = loc.sentCorr, b = loc.corr, ca = Math.cos(a.psi), sa = Math.sin(a.psi), cb = Math.cos(b.psi), sb = Math.sin(b.psi);
+    const moved = Math.hypot(ca * S.x - sa * S.y + a.x - (cb * S.x - sb * S.y + b.x), sa * S.x + ca * S.y + a.y - (sb * S.x + cb * S.y + b.y));
+    if (moved >= 3 || Math.abs(b.psi - a.psi) >= 1.5 * Math.PI / 180) sendWaypoints(true);
+  };
+  function locUi() {
+    const c = loc.corr, m = loc.toMap(S.x, S.y, S.th);
+    $("locCorr").textContent = loc.active || c.psi || c.x ? `${c.x.toFixed(1)} / ${c.y.toFixed(1)} cm, ${(c.psi * 180 / Math.PI).toFixed(1)}°` : "–";
+    $("locStats").textContent = loc.active ? loc.statsText() : "aus";
+    $("locPose").textContent = S.connected ? `x ${m.x.toFixed(1)} cm, y ${m.y.toFixed(1)} cm, θ ${m.th.toFixed(1)}°` : "–";
+  }
 
   // ============================================================================
   // World views (control map, simulation, replay): pan, zoom, drawing
@@ -825,12 +1000,13 @@
     },
   });
   function drawMap() {
-    if ($("follow").checked && S.connected) { view.cx = S.x; view.cy = S.y; }
+    const rp = loc.toMap(S.x, S.y, S.th);
+    if ($("follow").checked && S.connected) { view.cx = rp.x; view.cy = rp.y; }
     view.draw({
       grid: map,
       trails: [{ pts: S.trail, color: "--map-trail" }],
       waypoints: { list: wps, cur: curWp() },
-      robots: [{ x: S.x, y: S.y, th: S.th, color: "--robot" }],
+      robots: [{ ...rp, color: "--robot" }],
     });
   }
 
@@ -890,7 +1066,7 @@
     ui.mapDirty = true;
   }
 
-  async function sendWaypoints() {
+  async function sendWaypoints(quiet = false) {
     if (!S.link) return toast("Nicht verbunden");
     if (!wps.length) return toast("Keine Wegpunkte gesetzt");
     if (wps.every((p) => p.reached)) wps.forEach((p) => (p.reached = false));    // all done: start again
@@ -898,10 +1074,12 @@
     Object.assign(mission, { active: true, started: false, acked: false, paused: false, base, count: part.length });
     renderWps();
     await S.link.write(cmd.wpClear());
-    for (let i = 0; i < part.length; i += 4) await S.link.write(cmd.wpSet(i, part.slice(i, i + 4)));
+    const odo = part.map((p) => loc.toOdo(p.x, p.y));     // the robot drives in its odometry frame
+    loc.sentCorr = { ...loc.corr }; loc.sentAt = performance.now();
+    for (let i = 0; i < odo.length; i += 4) await S.link.write(cmd.wpSet(i, odo.slice(i, i + 4)));
     await S.link.write(cmd.wpCommit(part.length));
     requestMode(4);
-    toast(base ? `Weiter mit Wegpunkt ${base + 1} (${part.length} offen)` : `${part.length} Wegpunkte gesendet, Fahrt startet`);
+    if (!quiet) toast(base ? `Weiter mit Wegpunkt ${base + 1} (${part.length} offen)` : `${part.length} Wegpunkte gesendet, Fahrt startet`);
   }
 
   function pauseOrResume() {
@@ -1252,6 +1430,7 @@
     });
     $("joy").classList.toggle("disabled", S.mode !== 1);
     $("joyInfo").textContent = S.mode === 1 ? `Geschwindigkeit ${joy.sent[0]} %, Lenkung ${joy.sent[1]} %` : "Nur im Modus Fernsteuerung aktiv";
+    locUi();
     if (!S.connected) return;
     $("stMode").textContent = MODE_NAMES[S.mode] ?? S.mode;
     $("stNav").textContent = S.mode === 2 ? (NAV_NAMES[S.nav] ?? S.nav) : "–";
@@ -1292,7 +1471,7 @@
   // Tab "Simulation": ground truth view of the simulated robot
   // ============================================================================
   const sim = {
-    link: null, running: false, dirty: true, trueTrail: [], estTrail: [],
+    link: null, running: false, dirty: true, trueTrail: [], estTrail: [], corTrail: [],
     get follow() { return $("simFollow").checked; },
     set follow(v) { $("simFollow").checked = v; },
     // right: the map the robot builds (estimated pose, odometry frame), like in the tab "Steuerung"
@@ -1318,6 +1497,8 @@
     }),
     // odometry frame (origin = start or last odometry reset of the estimate) <-> world
     frame() { return (this.link && this.link.origin) || this.startPose(); },
+    // map pose (heading in deg) -> world pose (psi in rad, counter-clockwise)
+    mapToWorld(m) { const w = this.odo2world(m.x, m.y); return { x: w.x, y: w.y, psi: this.frame().psi - m.th * Math.PI / 180 }; },
     odo2world(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi); return { x: o.x + c * x - s * y, y: o.y + s * x + c * y }; },
     world2odo(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi), dx = x - o.x, dy = y - o.y; return { x: c * dx + s * dy, y: -s * dx + c * dy }; },
     settings() {
@@ -1362,7 +1543,7 @@
       const id = $("simRoom").value, r = simRoom(id);
       $("simRoomDesc").textContent = (SIM_INFO[id] || {}).desc || "";
       this.showStart(r.start);
-      if (r.world && Number($("mapSize").value) < 960) { $("mapSize").value = "960"; map.clear(); }
+      if (r.world && $("mapSize").value !== "1600:10") { $("mapSize").value = "1600:10"; map.clear(); }   // whole building (160 m)
       this.view.scale = 1.2; this.centerOn(r.start);
     },
     attach(link) { this.link = link; this.running = true; this.follow = true; this.view.scale = this.estView.scale = 1.2; this.ui(); },
@@ -1395,12 +1576,13 @@
     restartOdom() {
       this.link.write(cmd.odomReset());
       S.lastOdom = null; S.measL = S.measR = 0;
-      map.clear(); S.trail = []; ui.mapDirty = true;
+      map.clear(); loc.reset(); S.trail = []; ui.mapDirty = true;
     },
-    clearTrails() { this.trueTrail = []; this.estTrail = []; this.dirty = true; },
+    clearTrails() { this.trueTrail = []; this.estTrail = []; this.corTrail = []; this.dirty = true; },
     sample(l) {       // every 100 ms from the simulation
       const add = (t, x, y) => { const q = t[t.length - 1]; if (!q || Math.hypot(q[0] - x, q[1] - y) > 0.5) { t.push([x, y]); if (t.length > 20000) t.splice(0, 5000); } };
       add(this.trueTrail, l.p.x, l.p.y); add(this.estTrail, l.est.x, l.est.y);
+      const cw = this.mapToWorld(loc.toMap(S.x, S.y, S.th)); add(this.corTrail, cw.x, cw.y);
       this.dirty = true;
     },
     draw() {
@@ -1420,13 +1602,14 @@
         frame: this.frame(), grid: map, trails: [{ pts: S.trail, color: "--map-trail" }],
         waypoints: { list: wps, cur: curWp() },
         start: { x: 0, y: 0, psi: 0 },
-        robots: [{ x: S.x, y: S.y, th: S.th, color: "--robot" }],
+        robots: [{ ...loc.toMap(S.x, S.y, S.th), color: "--robot" }],
       });
       const fov = { x: l.p.x + TOF_OFFSET_CM * Math.cos(l.p.psi), y: l.p.y + TOF_OFFSET_CM * Math.sin(l.p.psi), psi: l.p.psi, range: Number($("mapRange").value) };
       this.view.draw({
         walls: l.walls, world: l.world, fov, rays: l.rays, start: l.origin || start,
         waypoints: { list: wps.map((p) => ({ ...this.odo2world(p.x, p.y), reached: p.reached })), cur: curWp() },
-        trails: [{ pts: this.estTrail, color: "--map-trail" }, { pts: this.trueTrail, color: "--true-trail", dash: [6, 4] }],
+        trails: [{ pts: this.estTrail, color: "--map-trail" }, ...(loc.active ? [{ pts: this.corTrail, color: "--s3" }] : []),
+                 { pts: this.trueTrail, color: "--true-trail", dash: [6, 4] }],
         robots: [{ x: l.est.x, y: l.est.y, th: -l.est.psi * 180 / Math.PI, color: "--robot", alpha: 0.55 },
                  { x: l.p.x, y: l.p.y, th: -l.p.psi * 180 / Math.PI, color: "--true-robot" }],
       });
@@ -1434,6 +1617,9 @@
       $("simErrPos").textContent = `${ePos.toFixed(1)} cm`;
       $("simErrTh").textContent = `${eTh.toFixed(1)}°`;
       $("simDist").textContent = `${(l.dist / 100).toFixed(2)} m`;
+      const mw = this.mapToWorld(loc.toMap(S.x, S.y, S.th));
+      $("simErrPosMap").textContent = loc.active ? `${Math.hypot(mw.x - l.p.x, mw.y - l.p.y).toFixed(1)} cm` : "– (Lokalisierung aus)";
+      $("simErrThMap").textContent = loc.active ? `${wrap180((mw.psi - l.p.psi) * 180 / Math.PI).toFixed(1)}°` : "–";
       const [mt, mc] = missionText();
       st.textContent = `${mt} · Schätzfehler ${ePos.toFixed(0)} cm / ${eTh.toFixed(1)}° · ${{ enc: "Kurs aus Encodern", gyro: "Kurs aus Gyro", fused: "Kurs aus Encoder + Gyro" }[l.cfg.heading]}`;
       st.className = `map-status map-status-bar ${mc || (Math.abs(eTh) > 10 || ePos > 20 ? "warn" : "ok")}`;
@@ -1473,15 +1659,15 @@
       $("replayStatus").textContent = `Geladen: ${name}`;
       this.advanceTo(this.t0); this.ui();
     },
-    restart() { this.grid.clear(); this.tofIdx = 0; this.stateIdx = 0; this.trail = []; this.dirty = true; },
+    restart() { this.grid.clear(); (this.loc || (this.loc = new Localizer(this.grid))).reset(); this.tofIdx = 0; this.stateIdx = 0; this.trail = []; this.dirty = true; },
     advanceTo(t) {
       const d = this.data;
       while (this.tofIdx < d.tof.length && d.tof[this.tofIdx][0] <= t) {
-        const r = d.tof[this.tofIdx++]; this.grid.integrate(r.slice(4), r[1], r[2], r[3]);
+        const r = d.tof[this.tofIdx++]; this.loc.frame(r.slice(4), r[1], r[2], r[3]);
       }
       while (this.stateIdx < d.state.length && d.state[this.stateIdx][0] <= t) {
-        const r = d.state[this.stateIdx++], q = this.trail[this.trail.length - 1];
-        if (!q || Math.hypot(q[0] - r[1], q[1] - r[2]) > 0.5) this.trail.push([r[1], r[2]]);
+        const r = d.state[this.stateIdx++], q = this.trail[this.trail.length - 1], m = this.loc.toMap(r[1], r[2], r[3]);
+        if (!q || Math.hypot(q[0] - m.x, q[1] - m.y) > 0.5) this.trail.push([m.x, m.y]);
       }
       this.t = t; this.dirty = true;
     },
@@ -1516,10 +1702,11 @@
       if (!d) { this.view.draw({}); this.dirty = false; return; }
       const s = d.state[Math.max(0, this.stateIdx - 1)];
       const [, x, y, th, cl, cr, ml, mr, mode, , wi, wst, front] = s;
-      if (this.follow) { this.view.cx = x; this.view.cy = y; }
+      const mp = this.loc.toMap(x, y, th);
+      if (this.follow) { this.view.cx = mp.x; this.view.cy = mp.y; }
       const wpList = (d.waypoints || []).map((p) => ({ ...p, reached: false }));
       this.view.draw({ grid: this.grid, trails: [{ pts: this.trail, color: "--map-trail" }],
-        waypoints: { list: wpList, cur: mode === 4 && (wst === 1 || wst === 3) ? wi : -1 }, robots: [{ x, y, th, color: "--robot" }] });
+        waypoints: { list: wpList, cur: mode === 4 && (wst === 1 || wst === 3) ? wi : -1 }, robots: [{ ...mp, color: "--robot" }] });
       $("rpMode").textContent = MODE_NAMES[mode] ?? mode;
       $("rpPose").textContent = `x ${x.toFixed(1)}, y ${y.toFixed(1)} cm, θ ${th.toFixed(1)}°`;
       $("rpCmd").textContent = `L ${cl} / R ${cr} cm/s`;
@@ -1633,6 +1820,7 @@
     for (const sel of [".c-mode", ".c-wp", ".c-joy"]) left.appendChild(document.querySelector(`#tab-robkit ${sel}`));
     const side = toSim ? $("simSide") : $("ctlSide");
     side.insertBefore(document.querySelector("#tab-robkit .c-info"), side.firstChild);
+    side.insertBefore(document.querySelector("#tab-robkit .c-loc"), document.querySelector("#tab-robkit .c-info").nextSibling);
     (toSim ? $("simMain") : $("ctlMain")).appendChild(document.querySelector("#tab-robkit .c-plots"));     // trajectories below the map(s)
   }
   placeSharedControls("control");
@@ -1648,7 +1836,7 @@
     try {
       $("chipLink").textContent = "verbinde …";
       const name = await link.connect(false);
-      S.link = link; S.demo = demo; S.connected = true; S.tRaw = null; S.tOff = 0; S.lastOdom = null; S.cnt = -1; traj.clear();
+      S.link = link; S.demo = demo; S.connected = true; S.tRaw = null; S.tOff = 0; S.lastOdom = null; S.cnt = -1; traj.clear(); loc.reset();
       S.params = []; $("paramBody").innerHTML = "";
       $("chipLink").textContent = name; $("chipLink").classList.add("on");
       $("connectBtn").textContent = "Trennen"; $("demoBtn").disabled = true; $("connectBtn").disabled = false;
@@ -1723,14 +1911,26 @@
   $("zoomIn").onclick = () => { view.zoom(1.3); ui.mapDirty = true; };
   $("zoomOut").onclick = () => { view.zoom(1 / 1.3); ui.mapDirty = true; };
   $("follow").onchange = () => (ui.mapDirty = true);
-  $("wpSend").onclick = sendWaypoints;
+  $("wpSend").onclick = () => sendWaypoints();
   $("wpPause").onclick = pauseOrResume;
   $("wpClear").onclick = () => { wps.length = 0; mission.active = false; mission.paused = false; renderWps(); };
-  $("mapClear").onclick = () => { map.clear(); S.trail = []; ui.mapDirty = true; };
+  $("mapClear").onclick = () => { map.clear(); loc.clearMap(); S.trail = []; ui.mapDirty = true; };
+  // path only: the map stays (in the tab "Simulation" also the true and estimated path)
+  $("trailClear").onclick = () => { S.trail = []; sim.clearTrails(); ui.mapDirty = true; };
+  // localization: stage 1 on the robot (parameter GyroZupt), stages 2 and 3 in the app
+  $("locZupt").onchange = (e) => {
+    const p = S.params.find((q) => q && q.name === "GyroZupt");
+    if (!S.link || !p) {
+      e.target.checked = !e.target.checked;
+      return toast(S.link ? "Die Firmware kennt den Parameter GyroZupt nicht – neue Firmware flashen" : "Nicht verbunden");
+    }
+    S.link.write(cmd.paramSet(p.id, e.target.checked ? 1 : 0));
+  };
+  ["locMatch", "locRect"].forEach((id) => ($(id).onchange = () => { if (!loc.matching) loc.flush(); ui.dirty = ui.mapDirty = true; sim.dirty = replay.dirty = true; }));
   $("odomReset").onclick = () => {
     if (!S.link) return toast("Nicht verbunden");
     if (!confirm("Odometrie auf (0, 0, 0) setzen? Karte, Spur und Wegpunkte beziehen sich danach auf die neue Lage und werden gelöscht.")) return;
-    S.link.write(cmd.odomReset()); map.clear(); S.trail = []; wps.length = 0; mission.active = false; mission.paused = false;
+    S.link.write(cmd.odomReset()); map.clear(); loc.reset(); S.trail = []; wps.length = 0; mission.active = false; mission.paused = false;
     renderWps(); charts.clear(); S.lastOdom = null;
   };
   $("mapPng").onclick = () => mapCanvas.toBlob((b) => { const a = document.createElement("a"); a.href = URL.createObjectURL(b); a.download = `robkit_karte_${stamp()}.png`; a.click(); });
@@ -1746,6 +1946,7 @@
   $("recJson").onclick = () => download(`robkit_replay_${stamp()}.json`, recordingJson(), "application/json");
   $("recHead").onclick = toggleRec;
   $("rpUseCurrent").onclick = () => replay.load({ state: REC.rows, tof: REC.tof, waypoints: REC.wps || [] }, "aktuelle Aufnahme");
+  $("recToReplay").onclick = () => { $("rpUseCurrent").click(); document.querySelector('button[data-tab="replay"]').click(); };
   $("rpFile").onchange = (e) => replay.loadFiles(e.target.files);
   $("rpPlay").onclick = () => replay.toggle();
   $("rpSeek").oninput = (e) => replay.seek(Number(e.target.value) / 1000);
@@ -1753,7 +1954,7 @@
   $("simPickStart").onclick = () => { sim.setPicking(!sim.picking); sim.dirty = true; };
   $("simDefStart").onclick = () => { sim.showStart(simRoom($("simRoom").value).start); sim.applyStart(); };
   ["simStartX", "simStartY", "simStartTh"].forEach((id) => ($(id).onchange = () => sim.applyStart()));
-  $("mapSize").onchange = () => { map.clear(); S.trail = []; ui.mapDirty = true; sim.dirty = true; toast(`Kartengröße ${$("mapSize").selectedOptions[0].text}, Karte gelöscht`); };
+  $("mapSize").onchange = () => { map.clear(); loc.clearMap(); S.trail = []; ui.mapDirty = true; sim.dirty = true; toast(`Kartengröße ${$("mapSize").selectedOptions[0].text}, Karte gelöscht`); };
   $("tpWin").onchange = () => { traj.last = 0; };
   $("simReset").onclick = () => sim.resetPose();
   $("simZoomIn").onclick = () => sim.zoom(1.3);

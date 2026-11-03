@@ -10,7 +10,7 @@ Browser-Simulator für mobile Roboter (Differentialantrieb) – Lehrmaterial, DH
 - **Manuelle Steuerung & Odometrie**
 - **Lidar SLAM**
 - **Pfadfolgeregelung**
-- **ROBKIT1 Control** – Steuerung des Roboters ROBKIT1 (STM32 + BlueNRG) über Web Bluetooth: Modi (Fernsteuerung, Autopilot, Follow me, Wegpunkte), Joystick, Tastatur und PS4-Gamepad, Kartierung mit dem ToF-Sensor, Wegpunktfahrt mit Pure Pursuit, Parameter, Aufzeichnung und Replay. Ohne Hardware: Simulation des Roboters mit wahrer Umgebung und Karte des Roboters nebeneinander (u. a. Bürogebäude mit Atrium). Code in `js/tab-robkit.js`, Element-IDs mit Präfix `rk`.
+- **ROBKIT1 Control** – Steuerung des Roboters ROBKIT1 (STM32 + BlueNRG) über Web Bluetooth: Modi (Fernsteuerung, Autopilot, Follow me, Wegpunkte), Joystick, Tastatur und PS4-Gamepad, Kartierung mit dem ToF-Sensor, Wegpunktfahrt mit Pure Pursuit, Parameter, Aufzeichnung und Replay. Lokalisierung in drei zuschaltbaren Stufen: Gyro-Offset im Stillstand (auf dem Roboter), Abgleich der ToF-Bilder mit der Karte, Ausrichtung an rechtwinkligen Wänden. Ohne Hardware: Simulation des Roboters mit wahrer Umgebung und Karte des Roboters nebeneinander (u. a. Bürogebäude mit Atrium, ganz kartierbar). Code in `js/tab-robkit.js`, Element-IDs mit Präfix `rk`.
 
 Oben rechts schaltet *◐ Auto / ☀ Hell / ☾ Dunkel* die Darstellung aller Reiter um (Auto folgt dem System, die Wahl wird im Browser gespeichert).
 

@@ -444,7 +444,7 @@ pre.code { margin: 0; padding: 8px 10px; background: var(--panel-2); border: 1px
   /* ROBKIT1 Control auf dem Telefon: Modus, Karte, Wegpunkte, Joystick, Zustand, Trajektorien, Kartenoptionen */
   #tab-robkit [data-pane="control"] .layout > *, #tab-robkit [data-pane="sim"] .layout > * { display: contents; }
   #tab-robkit .c-mode { order: 1; } #tab-robkit .c-map { order: 2; } #tab-robkit .c-wp { order: 3; } #tab-robkit .c-joy { order: 4; }
-  #tab-robkit .c-info { order: 5; } #tab-robkit .c-plots { order: 6; } #tab-robkit .c-mapopt { order: 7; }
+  #tab-robkit .c-info { order: 5; } #tab-robkit .c-plots { order: 6; } #tab-robkit .c-mapopt { order: 7; } #tab-robkit .c-loc { order: 8; }
   .rk-charts { grid-template-columns: minmax(0, 1fr); }
   .rk-map-wrap, .rk-sim-wrap { height: min(60vh, 520px); }
 }
