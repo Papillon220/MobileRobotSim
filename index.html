@@ -835,11 +835,11 @@ ReachedGoal
             <div class="seg" id="rkNavVariant"><button data-v="1" disabled>Standard</button><button data-v="2" disabled>Random Turn</button></div>
           </div>
           <button class="btn danger" id="rkStopBtn">STOPP</button>
-          <details class="fold"><summary>Tastatur</summary><p class="hint">Leertaste = Stopp. Fernsteuerung mit Pfeiltasten oder W/A/S/D, durch Ziehen auf dem Roboterbild (nach oben = vorwärts, zur Seite = lenken) oder mit dem Gamepad.</p></details>
-          <p class="hint" id="rkJoyInfo">Nur im Modus Fernsteuerung aktiv</p>
-          <div class="rk-pad" id="rkPadInfo"><span><b>Gamepad (PS4):</b> <span id="rkPadState">nicht verbunden</span></span>
-            <details><summary>Belegung</summary><p class="hint">Koppeln per USB oder Bluetooth, dann eine Taste drücken. Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller · ✕ Stopp · ○ Fernsteuerung · □ Autopilot · △ Wegpunkte · Options = Pause/Weiter · L1 = Aufnahme</p></details>
-          </div>
+          <details class="fold" id="rkPadInfo"><summary>Tastatur &amp; Gamepad (<span id="rkPadState">nicht verbunden</span>)</summary>
+            <p class="hint">Leertaste = Stopp. Fernsteuerung mit Pfeiltasten oder W/A/S/D, durch Ziehen auf dem Roboterbild (nach oben = vorwärts, zur Seite = lenken) oder mit dem Gamepad.</p>
+            <p class="hint">Gamepad (PS4): Koppeln per USB oder Bluetooth, dann eine Taste drücken. Linker Stick ↕ Geschwindigkeit · rechter Stick ↔ Lenkung · R2 = schneller · ✕ Stopp · ○ Fernsteuerung · □ Autopilot · △ Wegpunkte · Options = Pause/Weiter · L1 = Aufnahme</p>
+          </details>
+          <p class="hint" id="rkJoyInfo" hidden></p>
         </div>
         <div class="card c-wp">
           <h3>Wegpunkte</h3>
@@ -853,7 +853,6 @@ ReachedGoal
           <p class="hint" id="rkWpInfo">Koordinaten im Odometrie-System: Start = (0, 0), x nach vorn, y nach links. Erreichte Punkte werden grau.</p>
         </div>
         <div class="card c-joy">
-          <h3>Roboter</h3>
           <img class="rk-robot disabled" id="rkJoy" src="img/robkit1.jpg" alt="Roboter ROBKIT1" draggable="false">
           <details class="fold"><summary>Beschreibung</summary>
           <ul class="rk-spec">

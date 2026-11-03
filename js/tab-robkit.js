@@ -1440,7 +1440,8 @@
       b.classList.toggle("pending", modeReq.mode === m && S.mode !== m);
     });
     $("joy").classList.toggle("disabled", S.mode !== 1);
-    $("joyInfo").textContent = S.mode === 1 ? `Geschwindigkeit ${joy.sent[0]} %, Lenkung ${joy.sent[1]} %` : "Nur im Modus Fernsteuerung aktiv";
+    $("joyInfo").textContent = S.mode === 1 ? `Geschwindigkeit ${joy.sent[0]} %, Lenkung ${joy.sent[1]} %` : "";
+    $("joyInfo").hidden = S.mode !== 1;
     locUi(); navVariantUi();
     if (!S.connected) return;
     $("stMode").textContent = MODE_NAMES[S.mode] ?? S.mode;
