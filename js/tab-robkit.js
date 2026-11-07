@@ -383,7 +383,8 @@
       const el = p.vl * dt, er = p.vr * dt / (1 + this.cfg.scale);
       const ed = (el + er) / 2;
       this.psiEnc += (er - el) / TRACK_CM;
-      const gyro = (w + this.cfg.gyroOffset * Math.PI / 180 + (Math.random() - 0.5) * 0.002) * this.par("GyroScale");   // measured yaw rate: offset, noise, scale
+      const noise = this.cfg.ideal ? 0 : (Math.random() - 0.5) * 0.002;
+      const gyro = (w + this.cfg.gyroOffset * Math.PI / 180 + noise) * this.par("GyroScale");   // measured yaw rate: offset, noise, scale
       this.psiGyro += gyro * dt;
       // fusion: gyro heading, its offset is learned while the encoders report standstill (time constant 2 s) and subtracted
       if (Math.abs(el) + Math.abs(er) < 0.01 * dt) this.biasEst += (gyro - this.biasEst) * dt / 2;
@@ -458,7 +459,7 @@
         return best === null ? null : [x, best + (Math.random() - 0.5) * 0.6];
       });
     }
-    // line following like rk_line_control: Pure Pursuit on the tape points; line lost: hold, search, stop
+    // line following like rk_line_control: Pure Pursuit on the tape points; line lost: hold briefly, then stop
     lineFollow(front, dt) {
       if (!(this.t - this.lineT < 0.1)) { this.lineT = this.t; this.linePts = this.lineDetect(); }   // camera 10 Hz
       if (front < 150) { this.lineState = 4; return [0, 0]; }                                         // RK.LfStopDist
@@ -472,8 +473,7 @@
         return this.lineLast;
       }
       this.lineLost = (this.lineLost || 0) + dt;
-      if (this.lineLost < 0.5) { this.lineState = 1; return this.lineLast || [0, 0]; }
-      if (this.lineLost < 6.5) { this.lineState = 2; const w = this.par("Wturn") * (this.lineSide || 1); return [-w, w]; }
+      if (this.lineLost < 0.3) { this.lineState = 1; return this.lineLast || [0, 0]; }   // single missed images, then stop (RK.LfHoldTime, LfSearchTime = 0)
       this.lineState = 3; return [0, 0];
     }
     sendState(front) {
@@ -551,6 +551,48 @@
         for (let k = 0; k < 16; k++) b.setUint8(4 + k, z[part * 16 + k]);
         this.emit(b);
       }
+    }
+  }
+
+  // Co-simulation with Simulink (sub tab "Co-Simulation"): robkit_SimMdl with the block "Web App (Co-Sim)"
+  // (sim/RobkitWebLink.m) is a WebSocket server. Binary messages are the BLE packets of PROTOCOL.md in both
+  // directions; text messages (JSON) carry the simulation: scene (room) and truth (true pose, target, ToF hits).
+  // The link stays until "Trennen" and connects again whenever a simulation starts.
+  class CosimLink {
+    constructor(onPacket, onClose) { this.onPacket = onPacket; this.onClose = onClose; this.ws = null; this.enabled = false; this.open = false; }
+    async connect() {
+      this.url = cosim.url();
+      try { new URL(this.url); } catch { throw new Error(`ungültige Adresse ${this.url}`); }
+      this.enabled = true; this.dial();
+      return "Co-Simulation";
+    }
+    dial() {
+      clearTimeout(this.retry);
+      if (!this.enabled || this.ws) return;
+      let ws;
+      try { ws = new WebSocket(this.url); } catch (e) { this.enabled = false; toast(`Adresse ungültig: ${this.url}`); this.onClose(); return; }
+      ws.binaryType = "arraybuffer"; this.ws = ws;
+      ws.onopen = () => { if (this.ws === ws) { this.open = true; cosim.onOpen(this); } };
+      ws.onmessage = (e) => {
+        if (this.ws !== ws) return;
+        if (typeof e.data === "string") { try { cosim.onJson(JSON.parse(e.data)); } catch { /* not JSON */ } }
+        else this.onPacket(new DataView(e.data));
+      };
+      ws.onclose = () => {
+        if (this.ws !== ws) return;
+        const was = this.open; this.ws = null; this.open = false; cosim.onLost(was);
+        if (this.enabled) this.retry = setTimeout(() => this.dial(), 1500);   // simulation not started yet or stopped
+      };
+    }
+    write(bytes) {
+      if (this.open) this.ws.send(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes));
+      return Promise.resolve();
+    }
+    disconnect() {
+      this.enabled = false; clearTimeout(this.retry);
+      const ws = this.ws; this.ws = null; this.open = false;
+      if (ws) ws.close();
+      this.onClose();
     }
   }
 
@@ -1338,7 +1380,7 @@
       g.font = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif'; g.fillStyle = ink; g.textAlign = "left"; g.textBaseline = "middle";
       g.fillText(o.title, m.l, 11);
       g.font = font; g.fillStyle = muted; g.textAlign = "right"; g.fillText(o.unit, W - m.r, 11);
-      const series = o.series.filter((s) => !s.simOnly || sim.running);
+      const series = o.series.filter((s) => !s.simOnly || sim.running || cosim.attached);
       const tmax = n ? t[n - 1] : 0, t0 = win > 0 ? Math.max(0, tmax - win) : 0, t1 = win > 0 ? Math.max(t0 + win, tmax) : Math.max(tmax, 1);
       let i0 = 0; { let lo = 0, hi = n - 1; while (lo < hi) { const mid = (lo + hi) >> 1; if (t[mid] < t0) lo = mid + 1; else hi = mid; } i0 = Math.max(0, lo - 1); }
       let ymin = Infinity, ymax = -Infinity;
@@ -1428,11 +1470,12 @@
       T.t.push(S.t - this.t0); T.x.push(S.x); T.y.push(S.y); T.th.push(S.th);
       T.thEnc.push(S.hasHeading ? S.thEnc : null); T.thMag.push(S.hasHeading ? S.thMag : null);
       T.cl.push(S.cmdL); T.ml.push(S.measL); T.cr.push(S.cmdR); T.mr.push(S.measR); T.front.push(Math.min(S.front, 4000));
-      const l = sim.link;
-      if (l) {
-        const o = sim.world2odo(l.p.x, l.p.y), fr = sim.frame();
-        T.tx.push(o.x); T.ty.push(o.y); T.tth.push(-wrap180((l.p.psi - fr.psi) * 180 / Math.PI));
-        T.ePos.push(Math.hypot(l.est.x - l.p.x, l.est.y - l.p.y)); T.eTh.push(wrap180((l.est.psi - l.p.psi) * 180 / Math.PI));
+      // true values: simulated robot of the tab "Simulation" or the Simulink model (co-simulation)
+      const src = sim.link ? { o: sim, p: sim.link.p, est: sim.link.est } : cosim.live ? { o: cosim, p: cosim.p, est: cosim.est } : null;
+      if (src) {
+        const { o: v, p, est } = src, o = v.world2odo(p.x, p.y), fr = v.frame();
+        T.tx.push(o.x); T.ty.push(o.y); T.tth.push(-wrap180((p.psi - fr.psi) * 180 / Math.PI));
+        T.ePos.push(Math.hypot(est.x - p.x, est.y - p.y)); T.eTh.push(wrap180((est.psi - p.psi) * 180 / Math.PI));
       } else { T.tx.push(null); T.ty.push(null); T.tth.push(null); T.ePos.push(null); T.eTh.push(null); }
       if (T.t.length > 72000) for (const k in T) T[k].splice(0, 12000);       // at most 2 h at 10 Hz
     },
@@ -1656,11 +1699,14 @@
       if (key !== lastWpRender) { lastWpRender = key; renderWps(); }
       ui.mapDirty = true;
     }
-    if ((ui.tab === "control" || ui.tab === "sim") && ui.tofDirty && $("tofCard").open) { drawTof(); ui.tofDirty = false; }
-    if (ui.tab === "control" || ui.tab === "sim") camera.draw();
+    const live = ui.tab === "control" || ui.tab === "sim" || ui.tab === "cosim";
+    cosim.tick(now);
+    if (live && ui.tofDirty && $("tofCard").open) { drawTof(); ui.tofDirty = false; }
+    if (live) camera.draw();
     if (ui.tab === "control" && (ui.mapDirty || view.dirty)) { drawMap(); ui.mapDirty = false; }
     if (ui.tab === "sim") { if (ui.mapDirty) { sim.dirty = true; ui.mapDirty = false; } sim.draw(); }
-    if (ui.tab === "control" || ui.tab === "sim") traj.draw(now);
+    if (ui.tab === "cosim") { if (ui.mapDirty) { cosim.dirty = true; ui.mapDirty = false; } cosim.draw(); }
+    if (live) traj.draw(now);
     if (ui.tab === "replay") replay.tick(now);
     if (ui.tab === "rec") recView.draw(now);
     if (ui.tab === "plots" && (!frame.last || now - frame.last > 100)) { charts.draw(); frame.last = now; }
@@ -1702,8 +1748,29 @@
     odo2world(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi); return { x: o.x + c * x - s * y, y: o.y + s * x + c * y }; },
     world2odo(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi), dx = x - o.x, dy = y - o.y; return { x: c * dx + s * dy, y: -s * dx + c * dy }; },
     settings() {
-      return { room: $("simRoom").value, heading: $("simHeading").value, scale: Number($("simScale").value) / 100,
+      const s = { room: $("simRoom").value, heading: $("simHeading").value, scale: Number($("simScale").value) / 100,
         slip: Number($("simSlip").value), speed: Number($("simSpeed").value), gyroOffset: Number($("simGyroOff").value) || 0 };
+      s.ideal = s.scale === 0 && s.slip === 0 && s.gyroOffset === 0;   // no odometry errors at all (also no gyro noise)
+      return s;
+    },
+    // button "Ideale Odometrie": all odometry errors off; a second click restores the previous values
+    toggleIdeal() {
+      const ids = ["simScale", "simSlip", "simGyroOff"];
+      if (this.settings().ideal) {
+        if (!this.beforeIdeal) return toast("Die Odometrie ist bereits ideal");
+        ids.forEach((id, k) => ($(id).value = this.beforeIdeal[k]));
+        this.beforeIdeal = null; toast("Odometrie-Fehler wiederhergestellt");
+      } else {
+        this.beforeIdeal = ids.map((id) => $(id).value);
+        ids.forEach((id) => ($(id).value = "0"));
+        toast("Ideale Odometrie: keine Fehler bei Radradius, Schlupf und Gyroskop");
+      }
+      this.applySettings("simIdeal"); this.idealUi();
+    },
+    idealUi() {
+      const on = this.settings().ideal;
+      $("simIdeal").classList.toggle("active", on);
+      $("simIdeal").textContent = on ? (this.beforeIdeal ? "Ideale Odometrie ✓ (Fehler zurück)" : "Ideale Odometrie ✓") : "Ideale Odometrie";
     },
     // start pose from the fields (m, deg) in cm and rad
     startPose() {
@@ -1758,7 +1825,7 @@
     ui() {
       $("simStart").textContent = this.running ? "■ Simulation beenden" : "▶ Simulation starten";
       $("simStart").classList.toggle("go", !this.running);
-      document.querySelectorAll("#tab-robkit .sim-only").forEach((e) => (e.hidden = !this.running));
+      simOnlyUi();
       $("simReset").disabled = !this.running;
       $("demoBtn").textContent = this.running ? "Simulation läuft" : "Simulation";
     },
@@ -1827,6 +1894,172 @@
       this.dirty = false;
     },
   };
+
+  // ============================================================================
+  // Tab "Co-Simulation": robkit_SimMdl computes plant and controller, this tab shows the
+  // true world from Simulink next to the robot's map and operates the robot via CosimLink
+  // ============================================================================
+  const HIT_COLORS = ["--muted", "--ray", "--s4", "--bad"];     // ToF hit: floor, wall, target, cliff
+  const cosim = {
+    link: null, attached: false, scene: null, truth: null, live: false, lastRx: 0, rate: 0, nRx: 0, tRate: 0,
+    trueTrail: [], estTrail: [], dirty: true,
+    url() {
+      const u = $("csUrl").value.trim();
+      try { localStorage.setItem("rkCosimUrl", u); } catch { /* storage blocked */ }
+      return u;
+    },
+    get follow() { return $("csFollow").checked; },
+    set follow(v) { $("csFollow").checked = v; },
+    estView: new WorldView($("csEstCanvas"), {
+      onUserMove: () => { cosim.follow = false; cosim.dirty = true; },
+      onView: () => cosim.syncFrom(cosim.estView),
+      onTap: (x, y) => cosim.tapWaypoint(x, y),
+    }),
+    view: new WorldView($("csCanvas"), {
+      onUserMove: () => { cosim.follow = false; cosim.dirty = true; },
+      onView: () => cosim.syncFrom(cosim.view),
+      onTap: (x, y) => cosim.tapWaypoint(x, y),
+    }),
+    tapWaypoint(x, y) {          // drawn in room coordinates, waypoints in the odometry frame
+      if (!$("wpEdit").checked) return;
+      if (wps.length >= WP_MAX) return toast(`Höchstens ${WP_MAX} Wegpunkte`);
+      const o = this.world2odo(x, y); wps.push({ x: Math.round(o.x), y: Math.round(o.y), reached: false }); renderWps(); this.dirty = true;
+    },
+    // odometry frame = start pose of the Simulink model (SIM.x0_m, y0_m, theta0_deg), room frame in cm
+    frame() { return (this.scene && this.scene.start) || { x: 0, y: 0, psi: 0 }; },
+    odo2world(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi); return { x: o.x + c * x - s * y, y: o.y + s * x + c * y }; },
+    world2odo(x, y) { const o = this.frame(), c = Math.cos(o.psi), s = Math.sin(o.psi), dx = x - o.x, dy = y - o.y; return { x: c * dx + s * dy, y: -s * dx + c * dy }; },
+    get p() { const t = this.truth; return t ? { x: t.x, y: t.y, psi: t.psi } : null; },
+    // estimated pose of the controller (Pose Estimation, state packet) in room coordinates
+    get est() { const w = this.odo2world(S.x, S.y); return { x: w.x, y: w.y, psi: this.frame().psi - S.th * Math.PI / 180 }; },
+    syncFrom(v) {
+      const w = v === this.view ? this.estView : this.view;
+      w.cx = v.cx; w.cy = v.cy; w.scale = v.scale; w.dirty = v.dirty = this.dirty = true;
+    },
+    zoom(f) { this.view.zoom(f); this.syncFrom(this.view); },
+    attach(link) { this.link = link; this.attached = true; this.follow = true; this.ui(); simOnlyUi(); },
+    detach() { this.link = null; this.attached = false; this.live = false; this.truth = null; this.ui(); simOnlyUi(); },
+    clearTrails() { this.trueTrail = []; this.estTrail = []; this.dirty = true; },
+    // new simulation run (WebSocket open): time, odometry and map start again
+    onOpen(link) {
+      S.tRaw = null; S.tOff = 0; S.lastOdom = null; S.cnt = -1; S.hasHeading = false; S.trail = [];
+      traj.clear(); loc.reset(); map.clear(); clearTape(); this.clearTrails();
+      S.params = []; $("paramBody").innerHTML = "";
+      mission.active = false; mission.paused = false; wps.forEach((p) => (p.reached = false)); renderWps();
+      link.write(cmd.stream(Number($("tofRate").value)));
+      link.write(cmd.paramGet(0xff));
+      $("chipLink").textContent = "Co-Sim: Simulink"; $("chipLink").classList.add("on");
+      toast("Simulink verbunden – Co-Simulation läuft");
+      this.ui(); ui.dirty = true;
+    },
+    onLost(was) {
+      this.live = false;
+      $("chipLink").textContent = "Co-Sim: warte auf Simulink"; $("chipLink").classList.remove("on");
+      if (was) toast("Simulation beendet – die App verbindet sich mit dem nächsten Lauf");
+      this.ui(); this.dirty = true;
+    },
+    onJson(m) {
+      const rows = (v) => (Array.isArray(v) ? (v.length && typeof v[0] === "number" ? [v] : v) : []);   // jsonencode: 1x4 -> flat
+      if (m.type === "scene") {
+        this.scene = { ...m, walls: rows(m.walls), holes: rows(m.holes) };
+        this.clearTrails(); this.view.scale = 2; this.view.cx = m.start.x; this.view.cy = m.start.y; this.syncFrom(this.view);
+      } else if (m.type === "truth") {
+        const now = performance.now();
+        this.truth = m; this.lastRx = now; this.nRx++;
+        if (now - this.tRate >= 1000) { this.rate = this.nRx * 1000 / (now - this.tRate || 1000); this.nRx = 0; this.tRate = now; }
+        if (!this.live) { this.live = true; this.ui(); }
+        const add = (t, x, y) => { const q = t[t.length - 1]; if (!q || Math.hypot(q[0] - x, q[1] - y) > 0.5) { t.push([x, y]); if (t.length > 20000) t.splice(0, 5000); } };
+        add(this.trueTrail, m.x, m.y);
+        if (S.tRaw !== null) { const e = this.est; add(this.estTrail, e.x, e.y); }
+        this.dirty = true;
+      }
+    },
+    // simulation paused or hanging: no data for 1 s
+    tick(now) { if (this.live && now - this.lastRx > 1000) { this.live = false; this.rate = 0; this.ui(); this.dirty = true; } },
+    ui() {
+      const on = this.attached;
+      $("csStart").textContent = on ? "■ Co-Simulation beenden" : "▶ Co-Simulation starten";
+      $("csStart").classList.toggle("go", !on);
+      $("csUrl").disabled = on;
+      $("cosimBtn").textContent = on ? "Co-Simulation läuft" : "Co-Simulation";
+    },
+    draw() {
+      if (!this.dirty && !this.view.dirty && !this.estView.dirty) return;
+      const st = $("csStatus"), sc = this.scene, t = this.live ? this.truth : null, fr = this.frame();
+      const set = (id, v) => ($(id).textContent = v);
+      if (this.follow && this.truth) { this.view.cx = this.truth.x; this.view.cy = this.truth.y; this.syncFrom(this.view); }
+      const connected = this.link && this.link.open;
+      this.estView.draw({
+        frame: fr, grid: map, trails: [{ pts: S.trail, color: "--map-trail" }],
+        waypoints: { list: wps, cur: curWp() }, start: { x: 0, y: 0, psi: 0 },
+        tape: { pts: tape.pts, live: S.mode === 5 ? tape.live : [] },
+        robots: connected && S.tRaw !== null ? [{ ...loc.toMap(S.x, S.y, S.th), color: "--robot" }] : [],
+      });
+      const p = this.truth, layers = {
+        walls: sc ? sc.walls : null, start: sc ? sc.start : null,
+        waypoints: { list: wps.map((q) => ({ ...this.odo2world(q.x, q.y), reached: q.reached })), cur: curWp() },
+        trails: [{ pts: this.estTrail, color: "--map-trail" }, { pts: this.trueTrail, color: "--true-trail", dash: [6, 4] }],
+        robots: [],
+      };
+      if (p) {
+        const off = sc ? sc.tofOffset : TOF_OFFSET_CM, sx = p.x + off * Math.cos(p.psi), sy = p.y + off * Math.sin(p.psi);
+        layers.fov = { x: sx, y: sy, psi: p.psi, range: Number($("mapRange").value) };
+        layers.rays = [];
+        for (let c = 0; c < 8; c++) { const k = 3 * 8 + c; if (p.hk[k] !== 0) layers.rays.push([sx, sy, p.hx[k], p.hy[k]]); }   // row 4 (horizontal)
+        if (S.tRaw !== null) { const e = this.est; layers.robots.push({ x: e.x, y: e.y, th: -e.psi * 180 / Math.PI, color: "--robot", alpha: 0.55 }); }
+        layers.robots.push({ x: p.x, y: p.y, th: -p.psi * 180 / Math.PI, color: "--true-robot" });
+      }
+      this.view.draw(layers);
+      this.overlay(p);
+      // status and values
+      if (!this.attached) { st.textContent = "Co-Simulation aus – Modell robkit_SimMdl im Modus Co-Simulation starten, dann „▶ Co-Simulation starten“"; st.className = "map-status map-status-bar"; }
+      else if (!connected) { st.textContent = `Warte auf Simulink unter ${this.link.url} … (Simulation von robkit_SimMdl im Modus Co-Simulation starten)`; st.className = "map-status map-status-bar warn"; }
+      else if (!t) { st.textContent = "Verbunden – Simulation pausiert oder wartet auf Daten"; st.className = "map-status map-status-bar warn"; }
+      else {
+        const e = this.est, ePos = Math.hypot(e.x - t.x, e.y - t.y), [mt, mc] = missionText();
+        st.textContent = `${mt} · Simulink t = ${t.t.toFixed(1)} s · Schätzfehler ${ePos.toFixed(0)} cm`;
+        st.className = `map-status map-status-bar ${mc || "ok"}`;
+      }
+      if (p && S.tRaw !== null) {
+        const e = this.est;
+        set("csErrPos", `${Math.hypot(e.x - p.x, e.y - p.y).toFixed(1)} cm`);
+        set("csErrTh", `${wrap180((e.psi - p.psi) * 180 / Math.PI).toFixed(1)}°`);
+      } else { set("csErrPos", "–"); set("csErrTh", "–"); }
+      set("csTime", p ? `${p.t.toFixed(2)} s${this.live ? "" : " (angehalten)"}` : "–");
+      set("csRate", this.live ? `${this.rate.toFixed(1)} Bilder/s` : "–");
+      set("csTrue", p ? `x ${(p.x / 100).toFixed(2)}, y ${(p.y / 100).toFixed(2)} m, θ ${wrap180(p.psi * 180 / Math.PI).toFixed(1)}°` : "–");
+      set("csTarget", p ? (p.target[2] ? `x ${(p.target[0] / 100).toFixed(2)}, y ${(p.target[1] / 100).toFixed(2)} m` : "nicht vorhanden") : "–");
+      this.dirty = false;
+    },
+    // holes (cliffs), follow-me target and the ToF hit points on top of the true world
+    overlay(p) {
+      const v = this.view, g = v.c.getContext("2d"), W = v.c.clientWidth, H = v.c.clientHeight, sc = this.scene;
+      g.save(); g.beginPath(); g.rect(v.m.l, 0, W - v.m.l, H - v.m.b); g.clip();
+      for (const [x0, y0, x1, y1] of (sc && sc.holes) || []) {
+        const [ax, ay] = v.w2s(x0, y1), [bx, by] = v.w2s(x1, y0);
+        g.fillStyle = css("--bad"); g.globalAlpha = 0.18; g.fillRect(ax, ay, bx - ax, by - ay);
+        g.globalAlpha = 0.8; g.strokeStyle = css("--bad"); g.setLineDash([5, 4]); g.lineWidth = 1.5; g.strokeRect(ax, ay, bx - ax, by - ay); g.setLineDash([]);
+      }
+      g.globalAlpha = 1;
+      if (p && p.target[2]) {
+        const [tx, ty] = v.w2s(p.target[0], p.target[1]), r = Math.max(3, ((sc && sc.targetRadius) || 6) * v.scale);
+        g.fillStyle = css("--s4"); g.globalAlpha = 0.35; g.beginPath(); g.arc(tx, ty, r, 0, 2 * Math.PI); g.fill();
+        g.globalAlpha = 1; g.strokeStyle = css("--s4"); g.lineWidth = 2; g.stroke();
+      }
+      if (p) {
+        for (let k = 0; k < p.hx.length; k++) {
+          const [hx, hy] = v.w2s(p.hx[k], p.hy[k]);
+          g.fillStyle = css(HIT_COLORS[p.hk[k]] || "--ray"); g.beginPath(); g.arc(hx, hy, 2.2, 0, 2 * Math.PI); g.fill();
+        }
+      }
+      g.restore();
+    },
+  };
+  try { const u = localStorage.getItem("rkCosimUrl"); if (u) $("csUrl").value = u; } catch { /* storage blocked */ }
+  // trajectories and the sim-only elements: true values from the simulation or the co-simulation
+  function simOnlyUi() {
+    document.querySelectorAll("#tab-robkit .sim-only").forEach((e) => (e.hidden = !(sim.running || cosim.attached)));
+  }
 
   // ============================================================================
   // Tab "Replay": recorded drives with the map built again from pose and ToF
@@ -2017,13 +2250,13 @@
   // ============================================================================
   // Mode, STOP, waypoints, joystick and state/ToF exist once and move to the tab
   // that is shown, so both tabs are operated the same way.
+  const SHARED_PANES = { control: ["ctlLeft", "ctlSide", "ctlMain"], sim: ["simLeft", "simSide", "simMain"], cosim: ["csLeft", "csSide", "csMain"] };
   function placeSharedControls(tab) {
-    const toSim = tab === "sim", left = toSim ? $("simLeft") : $("ctlLeft");
+    const [leftId, sideId, mainId] = SHARED_PANES[tab] || SHARED_PANES.control, left = $(leftId), side = $(sideId);
     for (const sel of [".c-joy", ".c-mode", ".c-wp"]) left.appendChild(document.querySelector(`#tab-robkit ${sel}`));
-    const side = toSim ? $("simSide") : $("ctlSide");
     side.insertBefore(document.querySelector("#tab-robkit .c-info"), side.firstChild);
     side.insertBefore(document.querySelector("#tab-robkit .c-loc"), document.querySelector("#tab-robkit .c-info").nextSibling);
-    (toSim ? $("simMain") : $("ctlMain")).appendChild(document.querySelector("#tab-robkit .c-plots"));     // trajectories below the map(s)
+    $(mainId).appendChild(document.querySelector("#tab-robkit .c-plots"));     // trajectories below the map(s)
   }
   placeSharedControls("control");
 
@@ -2031,18 +2264,27 @@
   // ============================================================================
   // Connection
   // ============================================================================
-  async function connect(demo) {
+  // kind: "ble" (robot via Web Bluetooth), "demo" (simulated robot of the tab "Simulation"),
+  // "cosim" (Simulink model robkit_SimMdl, tab "Co-Simulation")
+  async function connect(kind) {
     if (S.link) { S.link.disconnect(); return; }
-    const Link = demo ? DemoLink : BleLink;
+    const Link = { ble: BleLink, demo: DemoLink, cosim: CosimLink }[kind];
     const link = new Link(onPacket, onDisconnected);
     try {
       $("chipLink").textContent = "verbinde …";
       const name = await link.connect(false);
-      S.link = link; S.demo = demo; S.connected = true; S.tRaw = null; S.tOff = 0; S.lastOdom = null; S.cnt = -1; traj.clear(); loc.reset();
+      S.link = link; S.demo = kind === "demo"; S.cosim = kind === "cosim"; S.connected = true;
+      S.tRaw = null; S.tOff = 0; S.lastOdom = null; S.cnt = -1; traj.clear(); loc.reset();
       S.params = []; $("paramBody").innerHTML = "";
       $("chipLink").textContent = name; $("chipLink").classList.add("on");
-      $("connectBtn").textContent = "Trennen"; $("demoBtn").disabled = true; $("connectBtn").disabled = false;
-      if (demo) { $("connectBtn").textContent = "Simulation beenden"; sim.attach(link); }
+      $("connectBtn").textContent = "Trennen"; $("demoBtn").hidden = true; $("cosimBtn").hidden = true; $("connectBtn").disabled = false;   // only the stop button: the header stays one line
+      if (kind === "demo") { $("connectBtn").textContent = "Simulation beenden"; sim.attach(link); }
+      if (kind === "cosim") {      // the data come with the next simulation run (cosim.onOpen)
+        $("connectBtn").textContent = "Co-Simulation beenden"; cosim.attach(link);
+        $("chipLink").textContent = "Co-Sim: warte auf Simulink"; $("chipLink").classList.remove("on");
+        document.querySelector('#rkTabs button[data-tab="cosim"]').click();
+        ui.dirty = true; return;
+      }
       await link.write(cmd.stream(Number($("tofRate").value)));
       await link.write(cmd.camera(camera.open));
       await link.write(cmd.paramGet(0xff));
@@ -2054,10 +2296,10 @@
     ui.dirty = true;
   }
   function onDisconnected() {
-    S.link = null; S.connected = false;
-    sim.detach();
+    S.link = null; S.connected = false; S.demo = S.cosim = false;
+    sim.detach(); cosim.detach();
     $("chipLink").textContent = "nicht verbunden"; $("chipLink").classList.remove("on");
-    $("connectBtn").textContent = "Verbinden"; $("demoBtn").disabled = false;
+    $("connectBtn").textContent = "Verbinden"; $("demoBtn").hidden = false; $("cosimBtn").hidden = false;
     if (REC.on) toggleRec();
     if (mission.active) mission.paused = true;     // the robot stops on disconnect; continue with "Weiter"
     renderWps();
@@ -2104,10 +2346,16 @@
     document.querySelectorAll("#rkTabs button").forEach((x) => x.classList.toggle("active", x === b));
     document.querySelectorAll("#tab-robkit .rk-pane").forEach((s) => s.classList.toggle("active", s.dataset.pane === b.dataset.tab));
     ui.tab = b.dataset.tab; ui.mapDirty = ui.tofDirty = true; sim.dirty = replay.dirty = view.dirty = recView.dirty = true;
-    if (ui.tab === "sim" || ui.tab === "control") placeSharedControls(ui.tab);
+    cosim.dirty = true;
+    if (SHARED_PANES[ui.tab]) placeSharedControls(ui.tab);
   }));
-  $("connectBtn").onclick = () => connect(false);
-  $("demoBtn").onclick = () => connect(true);
+  $("connectBtn").onclick = () => connect("ble");
+  $("demoBtn").onclick = () => connect("demo");
+  $("cosimBtn").onclick = () => connect("cosim");
+  $("csStart").onclick = () => (cosim.attached ? S.link && S.link.disconnect() : connect("cosim"));
+  $("csZoomIn").onclick = () => cosim.zoom(1.3);
+  $("csZoomOut").onclick = () => cosim.zoom(1 / 1.3);
+  $("csFollow").onchange = () => { cosim.dirty = true; };
   document.querySelectorAll("#rkModeBtns button").forEach((b) => (b.onclick = () => setMode(Number(b.dataset.mode))));
   // autopilot variant: parameter NavVariant of the robot (1 Standard, 2 Random Turn), also while driving
   const navVariantParam = () => S.params.find((q) => q && q.name === "NavVariant");
@@ -2147,6 +2395,7 @@
   ["locMatch", "locRect"].forEach((id) => ($(id).onchange = () => { if (!loc.matching) loc.flush(); ui.dirty = ui.mapDirty = true; sim.dirty = replay.dirty = true; }));
   $("odomReset").onclick = () => {
     if (!S.link) return toast("Nicht verbunden");
+    if (S.cosim) return toast("In der Co-Simulation nicht verfügbar: Die Odometrie beginnt mit jedem Simulationslauf an der Startpose");
     if (!confirm("Odometrie auf (0, 0, 0) setzen? Karte, Spur und Wegpunkte beziehen sich danach auf die neue Lage und werden gelöscht.")) return;
     S.link.write(cmd.odomReset()); map.clear(); loc.reset(); clearTape(); S.trail = []; wps.length = 0; mission.active = false; mission.paused = false;
     renderWps(); charts.clear(); S.lastOdom = null;
@@ -2168,7 +2417,7 @@
   $("rpFile").onchange = (e) => replay.loadFiles(e.target.files);
   $("rpPlay").onclick = () => replay.toggle();
   $("rpSeek").oninput = (e) => replay.seek(Number(e.target.value) / 1000);
-  $("simStart").onclick = () => (sim.running ? S.link && S.link.disconnect() : connect(true));
+  $("simStart").onclick = () => (sim.running ? S.link && S.link.disconnect() : connect("demo"));
   $("simPickStart").onclick = () => { sim.setPicking(!sim.picking); sim.dirty = true; };
   $("simDefStart").onclick = () => { sim.showStart(simRoom($("simRoom").value).start); sim.applyStart(); };
   ["simStartX", "simStartY", "simStartTh"].forEach((id) => ($(id).onchange = () => sim.applyStart()));
@@ -2189,12 +2438,13 @@
       toast(`Eigene Karte geladen: ${w.length} Wände`);
     } catch (err) { toast(`Karte nicht lesbar: ${err.message}`, 5000); }
   };
-  ["simRoom", "simHeading", "simScale", "simSlip", "simGyroOff", "simSpeed"].forEach((id) => ($(id).onchange = () => { if (id === "simRoom") sim.roomChanged(); sim.applySettings(id); }));
-  window.addEventListener("resize", () => { ui.mapDirty = ui.tofDirty = true; sim.dirty = replay.dirty = true; });
+  ["simRoom", "simHeading", "simScale", "simSlip", "simGyroOff", "simSpeed"].forEach((id) => ($(id).onchange = () => { if (id === "simRoom") sim.roomChanged(); sim.applySettings(id); sim.idealUi(); }));
+  $("simIdeal").onclick = () => sim.toggleIdeal();
+  window.addEventListener("resize", () => { ui.mapDirty = ui.tofDirty = true; sim.dirty = replay.dirty = cosim.dirty = true; });
   // light / dark: switch in the header of MobileRobotSim (js/main.js); colours from the CSS variables
   function themeChanged() {
     [map, replay.grid, recView.grid].forEach((gr) => gr.invalidate());
-    sim.dirty = replay.dirty = recView.dirty = view.dirty = true; ui.dirty = ui.mapDirty = ui.tofDirty = true; traj.last = 0;
+    sim.dirty = replay.dirty = recView.dirty = view.dirty = cosim.dirty = true; ui.dirty = ui.mapDirty = ui.tofDirty = true; traj.last = 0;
   }
 
   function checkBluetooth() {
@@ -2207,7 +2457,7 @@
   }
   function init() {
     checkBluetooth(); charts.init(); traj.init(); renderWps();
-    sim.roomChanged(); sim.ui(); placeSharedControls("control");
+    sim.roomChanged(); sim.ui(); sim.idealUi(); placeSharedControls("control");
     requestAnimationFrame(frame);
   }
 

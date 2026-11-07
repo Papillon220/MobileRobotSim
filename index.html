@@ -688,6 +688,7 @@ ReachedGoal
         <div class="seg rk-subtabs" id="rkTabs" role="tablist">
           <button class="active" data-tab="control">Steuerung</button>
           <button data-tab="sim">Simulation</button>
+          <button data-tab="cosim">Co-Simulation</button>
           <button data-tab="replay">Replay</button>
           <button data-tab="plots">Messwerte</button>
           <button data-tab="params">Parameter</button>
@@ -703,6 +704,7 @@ ReachedGoal
         <button class="btn" id="rkRecHead" title="Aufnahme starten/stoppen (in jedem Unterreiter, Gamepad: L1)">● Aufnahme</button>
         <button class="btn primary" id="rkConnectBtn" title="Roboter per Web Bluetooth verbinden">Verbinden</button>
         <button class="btn" id="rkDemoBtn" title="Simulierter Roboter, ohne Hardware (Unterreiter Simulation)">Simulation</button>
+        <button class="btn" id="rkCosimBtn" title="Co-Simulation mit dem Simulink-Modell robkit_SimMdl (Unterreiter Co-Simulation)">Co-Simulation</button>
       </div>
       <p class="hint rk-banner" id="rkBanner" hidden></p>
 
@@ -972,6 +974,7 @@ ReachedGoal
                 </select></label>
                 <label class="full">Gyro-Offset [°/s]<input type="number" id="rkSimGyroOff" step="0.01" value="0.01"></label>
               </div>
+              <button class="btn" id="rkSimIdeal" title="Alle Odometrie-Fehler aus: kein Radradius-Fehler, kein Schlupf, kein Gyro-Offset und kein Gyro-Rauschen. Nochmal klicken stellt die vorherigen Werte wieder her.">Ideale Odometrie</button>
               <p class="hint">Der Weg kommt immer aus den Encodern, der Kurs je nach Auswahl aus den Encodern, nur aus dem Gyroskop oder aus beiden (Fusion: Kurs aus dem Gyroskop, dessen Offset im Stillstand – Encoder melden 0 – geschätzt und abgezogen wird). Schlupf und ungleiche Radradien verfälschen den Encoder-Kurs, der Gyro-Offset lässt den Gyro-Kurs gleichmäßig wegdriften (0,01 °/s ≈ 0,6° je Minute). So sieht man, warum die Karte „verdreht“.</p>
             </div>
             <div class="card c-mapopt">
@@ -983,6 +986,69 @@ ReachedGoal
                 <div class="stat"><span class="k">Position mit Lokalisierung</span><span class="v" id="rkSimErrPosMap">–</span></div>
                 <div class="stat"><span class="k">Kurs mit Lokalisierung</span><span class="v" id="rkSimErrThMap">–</span></div>
               </div>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <!-- ---------- Co-Simulation: Simulink rechnet Strecke und Controller, die App zeigt und bedient ---------- -->
+      <section class="rk-pane" data-pane="cosim">
+        <div class="layout">
+          <aside class="panel" id="rkCsLeft"></aside>
+          <div class="center" id="rkCsMain">
+            <div class="rk-group c-map">
+              <div class="toolbar">
+                <button class="btn go" id="rkCsStart">▶ Co-Simulation starten</button>
+                <input type="text" id="rkCsUrl" class="mono rk-cs-url" value="ws://127.0.0.1:8767" spellcheck="false" aria-label="Adresse des Simulink-Modells">
+                <span class="spacer"></span>
+                <button class="btn small" id="rkCsZoomIn" title="Vergrößern">＋</button>
+                <button class="btn small" id="rkCsZoomOut" title="Verkleinern">－</button>
+                <label class="chk"><input type="checkbox" id="rkCsFollow" checked> Roboter folgen</label>
+              </div>
+              <div class="map-status map-status-bar" id="rkCsStatus">Co-Simulation aus</div>
+              <div class="slam-views">
+                <div>
+                  <div class="view-title" title="Raum, wahre Pose, Follow-me-Ziel und ToF-Treffer aus dem Streckenmodell von robkit_SimMdl">Wahre Umgebung (Simulink)</div>
+                  <div class="canvas-wrap rk-sim-wrap"><canvas id="rkCsCanvas" aria-label="Wahre Umgebung aus Simulink"></canvas></div>
+                </div>
+                <div>
+                  <div class="view-title" title="Belegungsraster aus der geschätzten Pose (Pose Estimation im Controller); an der Startpose in die Welt gelegt">Karte des Roboters (geschätzt)</div>
+                  <div class="canvas-wrap rk-sim-wrap"><canvas id="rkCsEstCanvas" aria-label="Karte des Roboters"></canvas></div>
+                </div>
+              </div>
+              <div class="legend">
+                <span><i class="sw line dashed" style="--c:var(--true-trail)"></i>Wahre Bahn</span>
+                <span><i class="sw line" style="--c:var(--map-trail)"></i>Geschätzte Bahn</span>
+                <span><i class="sw box" style="--c:var(--bad)"></i>Klippe (kein Boden)</span>
+                <span><i class="sw dot" style="--c:var(--s4)"></i>Follow-me-Ziel</span>
+                <span><i class="sw box" style="--c:var(--fov)"></i>ToF-Sichtfeld</span>
+                <span><i class="sw dot" style="--c:var(--ray)"></i>ToF-Treffer</span>
+                <span><i class="sw dot" style="--c:var(--map-wp)"></i>Wegpunkt</span>
+              </div>
+              <p class="hint">Simulink rechnet Strecke und Controller (Bibliotheksblock robkit_lib/Controller wie auf dem Roboter). Die App zeigt die Telemetrie und schickt Modus, Joystick, Wegpunkte und Parameter wie über Bluetooth. Antippen setzt Wegpunkte (Schalter „Antippen setzt Wegpunkt“).</p>
+            </div>
+          </div>
+          <aside class="panel" id="rkCsSide">
+            <div class="card c-mapopt">
+              <h3>Werte aus Simulink</h3>
+              <div class="stats">
+                <div class="stat"><span class="k">Simulationszeit</span><span class="v" id="rkCsTime">–</span></div>
+                <div class="stat"><span class="k">Datenrate</span><span class="v" id="rkCsRate">–</span></div>
+                <div class="stat"><span class="k">Wahre Pose (Raum)</span><span class="v" id="rkCsTrue">–</span></div>
+                <div class="stat"><span class="k">Fehler Position</span><span class="v" id="rkCsErrPos">–</span></div>
+                <div class="stat"><span class="k">Fehler Kurs</span><span class="v" id="rkCsErrTh">–</span></div>
+                <div class="stat"><span class="k">Follow-me-Ziel</span><span class="v" id="rkCsTarget">–</span></div>
+              </div>
+            </div>
+            <div class="card c-mapopt">
+              <h3>Einrichtung in MATLAB/Simulink</h3>
+              <ol class="rk-steps">
+                <li><span class="mono">robkit_SimMdl.slx</span> öffnen (Ordner <span class="mono">Simulink_Robkit</span>).</li>
+                <li>Im Modell die Notiz „► Co-Simulation mit der Web-App“ anklicken oder <span class="mono">robkit_sim_mode('cosim')</span> ausführen.</li>
+                <li><i>Run</i>: Das Modell läuft in Echtzeit, die App kann sich jederzeit dazuschalten.</li>
+                <li>Hier „▶ Co-Simulation starten“. Die App verbindet sich und versucht es automatisch erneut, bis die Simulation läuft.</li>
+              </ol>
+              <p class="hint">Zurück zur reinen Simulink-Simulation mit Dashboard und 2D-Animation: Notiz „► Simulink-Visualisierung“ bzw. <span class="mono">robkit_sim_mode('simulink')</span>. Parameter aus dem Reiter „Parameter“ landen in <span class="mono">RK</span> im Base Workspace und wirken sofort. Nicht simuliert: Kamera, „Odometrie auf 0“. Chrome und Edge fragen beim ersten Mal, ob die Seite auf Geräte im lokalen Netzwerk zugreifen darf – bitte zulassen.</p>
             </div>
           </aside>
         </div>
